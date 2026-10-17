@@ -15,7 +15,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bc bison build-essential curl dwarves flex git kmod libedit2 \
+            bc bison build-essential ca-certificates curl dwarves flex git kmod libedit2 \
             libelf-dev libicu70 libncurses6 libssl-dev libtinfo6 libxml2 \
             libz3-4 python3 ripgrep zstd
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
