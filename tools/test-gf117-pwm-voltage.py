@@ -37,7 +37,7 @@ struct nvkm_therm_func {
 struct nvkm_therm { struct nvkm_therm_func *func; };
 struct nvkm_device { struct nvkm_therm *therm; };
 struct nvkm_subdev { struct nvkm_device *device; };
-struct nvkm_volt { struct nvkm_subdev subdev; };
+struct nvkm_volt { struct nvkm_subdev subdev; u32 min_uv, max_uv; };
 struct nvbios_volt { u32 base, pwm_freq, pwm_range; };
 struct gf117_volt { struct nvkm_volt base; struct nvbios_volt bios; u8 pwm_line; };
 #define container_of(p,t,m) ((t *)((char *)(p) - offsetof(t,m)))
@@ -61,7 +61,8 @@ int main(void) {
     struct nvkm_therm_func ops={mock_get,mock_clock};
     struct nvkm_therm therm={NULL};
     struct nvkm_device device={&therm};
-    struct gf117_volt volt={.base={.subdev={.device=&device}},
+    struct gf117_volt volt={.base={.subdev={.device=&device},
+        .min_uv=650000,.max_uv=1150000},
         .bios={.base=650000,.pwm_freq=172800,.pwm_range=500000},.pwm_line=11};
     int ret;
     assert(gf117_volt_pwm_get(&volt.base) == -ENODEV);
@@ -75,13 +76,20 @@ int main(void) {
     ret=gf117_volt_pwm_get(&volt.base);
     assert(ret == 837500);
     test_duty=4; assert(gf117_volt_pwm_get(&volt.base) == 900000);
+    volt.base.max_uv=850000;
+    assert(gf117_volt_pwm_get(&volt.base) == -ERANGE);
+    volt.base.max_uv=1150000; volt.base.min_uv=950000;
+    assert(gf117_volt_pwm_get(&volt.base) == -ERANGE);
+    volt.base.min_uv=1150001;
+    assert(gf117_volt_pwm_get(&volt.base) == -ERANGE);
+    volt.base.min_uv=650000;
     test_duty=8; assert(gf117_volt_pwm_get(&volt.base) == 1150000);
     test_duty=9; assert(gf117_volt_pwm_get(&volt.base) == -ERANGE);
     test_duty=3; test_div=7; assert(gf117_volt_pwm_get(&volt.base) == 864285);
     test_div=9; assert(gf117_volt_pwm_get(&volt.base) == -ERANGE);
     test_div=8; test_clock=-ENODEV;
     assert(gf117_volt_pwm_get(&volt.base) == -ENODEV);
-    assert(test_get_calls == 8);
+    assert(test_get_calls == 11);
     puts("ok: GF117 PWM readback requires active GF119 route and VBIOS divider; voltage math and errors checked");
     return 0;
 }

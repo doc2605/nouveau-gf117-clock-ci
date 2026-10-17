@@ -5,17 +5,30 @@ import subprocess
 import tempfile
 s=Path(__file__).with_name('test-gf117-core-once.sh').read_text()
 apply_branch=s[s.index('    --apply)'):s.index('    *) echo "Argumento inválido')]
-assert 'backend GF117 de tensão não foi implementado/validado' in apply_branch
-assert 'exit 2' in apply_branch
+assert '[[ $# == 1 ]] || exit 2' in apply_branch
+assert 'Teste de clock bloqueado antes de descarregar o driver' not in apply_branch
 assert s.index('    --apply)') < s.index('[[ $EUID == 0 ]]')
-assert 'Teste de clock indisponível' in s
-assert 'Uso: bash $0 --probe-only (execute como root)' in s
+assert '--probe-only|--apply' in s
+assert 'faults, tensão, temperatura e clocks são validados antes da escrita.' in s
+assert 'Uso: bash $0 --probe-only|--apply (execute como root)' in s
 assert 'Execute como root (ou invoque com sudo).' in s
-assert 'artifacts/local-build-20261017-pwm-route/nouveau.ko' in s
-assert 'a1e07e28b549887a142dae9d418bcaf57281b55469b9cec5d35d5cc4be840a6d' in s
+assert 'artifacts/github-actions/39024214497/gf117-nouveau-3126993b95ad4d8bc452c98bdc7e01252344eb46/nouveau.ko' in s
+assert '2021c4d279f0ad40412938a90d19f94f04fe2fe3c47a55a437cf7bf23dca6279' in s
 probe_start=s.index('if (( probe_only )); then', s.index('plan=$(cat "$debugfs/pstate_plan")'))
 clock_request=s.index('clock_attempted=1', probe_start)
+apply_body=s[s.index('[[ "$plan" == allow_reclock=1* ]]'):clock_request]
+for gate in ('check_faults "$load_cursor"', 'check_voltage_plan', 'read_temperature', 'read_clocks', 'memory_before'):
+    assert gate in apply_body, gate
+ordered=[apply_body.index('check_faults "$load_cursor"'),
+         apply_body.index('check_voltage_plan'),
+         apply_body.index('read_temperature'),
+         apply_body.index('read_clocks'),
+         apply_body.index('memory_before'),
+         apply_body.rindex('check_faults "$load_cursor"')]
+assert ordered == sorted(ordered), ordered
+assert s.index('clock_attempted=1') < s.index("printf '0f\\n' > \"$debugfs/pstate\"")
 probe_branch=s[probe_start:clock_request]
+assert "printf '0f\\n'" not in probe_branch
 assert 'gf117_pwm_diag' in probe_branch
 assert "rg '^gf117_pwm_diag '" in probe_branch
 assert "rg '^state=[0-9]+ id='" in probe_branch

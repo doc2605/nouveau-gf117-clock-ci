@@ -4,17 +4,13 @@ set -euo pipefail
 probe_only=0
 case "${1:-}" in
     --help|-h|'')
-        echo "Uso: bash $0 --probe-only (execute como root)"
-        echo "Lê GPIO/PWM candidato, sem solicitar mudança de clock."
+        echo "Uso: bash $0 --probe-only|--apply (execute como root)"
+        echo "--probe-only lê GPIO/PWM sem solicitar mudança de clock."
+        echo "--apply pede uma transição breve; faults, tensão, temperatura e clocks são validados antes da escrita."
         echo "O módulo é trocado temporariamente; init/teardown ainda acessam MMIO."
-        echo "Teste de clock indisponível: tensão PWM da GF117 ainda não tem backend validado."
         exit 0 ;;
     --probe-only) [[ $# == 1 ]] || exit 2; probe_only=1 ;;
-    --apply)
-        [[ $# == 1 ]] || exit 2
-        echo "Teste de clock bloqueado antes de descarregar o driver: VBIOS usa PWM e o backend GF117 de tensão não foi implementado/validado." >&2
-        echo "O preflight atual retorna -ENODEV; use --probe-only para coletar o diagnóstico PWM." >&2
-        exit 2 ;;
+    --apply) [[ $# == 1 ]] || exit 2 ;;
     *) echo "Argumento inválido; use --help" >&2; exit 2 ;;
 esac
 [[ $EUID == 0 ]] || { echo "Execute como root (ou invoque com sudo)." >&2; exit 2; }
@@ -32,8 +28,8 @@ if [[ -z "$repo_root" ]]; then
         exit 1
     fi
 fi
-module="$repo_root/artifacts/local-build-20261017-pwm-route/nouveau.ko"
-expected_hash=a1e07e28b549887a142dae9d418bcaf57281b55469b9cec5d35d5cc4be840a6d
+module="$repo_root/artifacts/github-actions/39024214497/gf117-nouveau-3126993b95ad4d8bc452c98bdc7e01252344eb46/nouveau.ko"
+expected_hash=2021c4d279f0ad40412938a90d19f94f04fe2fe3c47a55a437cf7bf23dca6279
 device=/sys/bus/pci/devices/0000:08:00.0
 debugfs=/sys/kernel/debug/dri/0000:08:00.0
 hwmon_root=/sys/class/hwmon

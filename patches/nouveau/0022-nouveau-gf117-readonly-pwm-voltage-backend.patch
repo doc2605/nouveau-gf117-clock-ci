@@ -45,7 +45,7 @@ transition. This patch adds no PWM or voltage writes.
  static int
 --- a/drivers/gpu/drm/nouveau/nvkm/subdev/volt/gf117.c
 +++ b/drivers/gpu/drm/nouveau/nvkm/subdev/volt/gf117.c
-@@ -27,11 +27,47 @@
+@@ -27,11 +27,48 @@
  #include <subdev/bios/volt.h>
  #include <subdev/fuse.h>
  #include <subdev/gpio.h>
@@ -86,7 +86,8 @@ transition. This patch adds no PWM or voltage writes.
 +		return -ERANGE;
 +
 +	uv = volt->bios.base + div_u64((u64)volt->bios.pwm_range * duty, divs);
-+	if (uv > INT_MAX)
++	if (base->min_uv > base->max_uv || uv < base->min_uv ||
++	    uv > base->max_uv || uv > INT_MAX)
 +		return -ERANGE;
 +	return uv;
 +}
