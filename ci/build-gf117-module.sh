@@ -19,17 +19,17 @@ for patch in "$repo"/patches/nouveau/*.patch; do
     patch --batch --fuzz=0 -d "$src" -p1 -i "$patch"
 done
 for test in core ram vga crtc worker pll; do
-    python "tools/test-gf117-$test-source.py" "$src"
+    python3 "tools/test-gf117-$test-source.py" "$src"
 done
-python tools/test-gf117-pwm-probe.py "$src"
-python tools/test-gf117-pwm-voltage.py "$src"
-python tools/test-gf117-core-helper.py
+python3 tools/test-gf117-pwm-probe.py "$src"
+python3 tools/test-gf117-pwm-voltage.py "$src"
+python3 tools/test-gf117-core-helper.py
 bash -n tools/test-gf117-core-once.sh
 make -C "$repo/work/build" LLVM=1 LLVM_IAS=1 -j"$(nproc)" \
     M="$src/drivers/gpu/drm/nouveau" modules
 module="$src/drivers/gpu/drm/nouveau/nouveau.ko"
 [[ "$(modinfo -F vermagic "$module" | xargs)" == '7.2.9-2-cachyos SMP preempt mod_unload' ]]
-python - "$module" <<'MANIFEST'
+python3 - "$module" <<'MANIFEST'
 import hashlib,json,os,subprocess,sys
 from pathlib import Path
 module=Path(sys.argv[1]);root=Path.cwd()
