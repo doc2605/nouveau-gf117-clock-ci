@@ -2,7 +2,7 @@
 
 This workflow builds the Nouveau patch series against CachyOS kernel 7.2.9-2
 with mock hardware checks. It does not validate reclocking on a physical GPU.
-The Ubuntu 22.04 container supplies LLVM 23.1.1 runtime dependencies, including ICU 70. The bundled headers contain the matching kernel configuration and
+The Ubuntu 26.04 container supplies current kernel build tools and objtool runtime dependencies. ICU 70 is installed from Ubuntu Jammy for the official LLVM 23.1.1 binary. The bundled headers contain the matching kernel configuration and
 Module.symvers; the official matching source tarball is downloaded and checked
 by SHA-256.
 
