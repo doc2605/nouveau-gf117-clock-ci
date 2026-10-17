@@ -1,0 +1,67 @@
+From: Codex <codex@openai.com>
+Subject: [PATCH] nouveau: read GF119 PWM channels only when routed active
+
+The GF119 therm path accepts GPIO normal and Nvio-special mux modes, but its
+PWM 0/1 getter reads hardware only in Nvio-special mode (GPIO bit 0x40). Keep
+the route index visible while marking the channel inactive and skipping its
+candidate MMIO reads in normal mode. PTHERM index 2 remains readable in either
+accepted mux mode. The diagnostic remains read-only.
+
+--- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c
++++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+@@ -239,6 +239,7 @@
+ 				u32 gpio11 = nvif_rd32(&ndrm->client.device.object, 0x00d63c);
+ 				u32 div = 0, duty = 0;
+ 				int pwm_index = -1;
++				int pwm_enabled = 0;
+ 
+ 				if ((gpio11 & 0x000000c0) == 0x00000000 ||
+ 				    (gpio11 & 0x000000c0) == 0x00000040) {
+@@ -249,24 +250,30 @@
+ 					default: break;
+ 				}
+ 				}
+-				switch (pwm_index) {
+-				case 0:
+-					div = nvif_rd32(&ndrm->client.device.object, 0x00e114);
+-					duty = nvif_rd32(&ndrm->client.device.object, 0x00e118);
+-					break;
+-				case 1:
+-					div = nvif_rd32(&ndrm->client.device.object, 0x00e11c);
+-					duty = nvif_rd32(&ndrm->client.device.object, 0x00e120);
+-					break;
+-				case 2:
+-					div = nvif_rd32(&ndrm->client.device.object, 0x0200d8);
+-					duty = nvif_rd32(&ndrm->client.device.object, 0x0200dc);
+-					break;
+-				default:
+-					break;
++				/* GF119 PWM 0/1 reads require GPIO's Nvio special-mode bit. */
++				if (pwm_index == 2 ||
++				    (pwm_index >= 0 && (gpio11 & 0x000000c0) == 0x00000040)) {
++					switch (pwm_index) {
++					case 0:
++						div = nvif_rd32(&ndrm->client.device.object, 0x00e114);
++						duty = nvif_rd32(&ndrm->client.device.object, 0x00e118);
++						break;
++					case 1:
++						div = nvif_rd32(&ndrm->client.device.object, 0x00e11c);
++						duty = nvif_rd32(&ndrm->client.device.object, 0x00e120);
++						break;
++					case 2:
++						div = nvif_rd32(&ndrm->client.device.object, 0x0200d8);
++						duty = nvif_rd32(&ndrm->client.device.object, 0x0200dc);
++						break;
++					default:
++						break;
++					}
++					pwm_enabled = 1;
+ 				}
+-				seq_printf(m, "gf117_pwm_diag gpio_line11=%08x pwm_index=%d selected=%08x/%08x\n",
+-					   gpio11, pwm_index, div, duty);
++				seq_printf(m, "gf117_pwm_diag gpio_line11=%08x pwm_index=%d "
++					   "pwm_enabled=%d selected=%08x/%08x\n",
++					   gpio11, pwm_index, pwm_enabled, div, duty);
+ 			}
+ 		}
+ 

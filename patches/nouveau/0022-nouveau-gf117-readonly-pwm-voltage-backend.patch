@@ -1,0 +1,149 @@
+From: Codex <codex@openai.com>
+Subject: [PATCH] nouveau: add read-only GF117 PWM voltage readback
+
+Resolve the VBIOS VID_PWM route and read back its GF119 PWM state to
+validate the currently supplied voltage before the opt-in core clock
+transition. This patch adds no PWM or voltage writes.
+
+--- a/drivers/gpu/drm/nouveau/include/nvkm/subdev/therm.h
++++ b/drivers/gpu/drm/nouveau/include/nvkm/subdev/therm.h
+@@ -101,6 +101,8 @@
+ 
+ int nvkm_therm_temp_get(struct nvkm_therm *);
+ int nvkm_therm_fan_sense(struct nvkm_therm *);
++int nvkm_therm_pwm_get(struct nvkm_therm *, int line, u32 *divs, u32 *duty);
++int nvkm_therm_pwm_clock(struct nvkm_therm *, int line);
+ int nvkm_therm_cstate(struct nvkm_therm *, int, int);
+ void nvkm_therm_clkgate_init(struct nvkm_therm *,
+ 			     const struct nvkm_therm_clkgate_pack *);
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/therm/base.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/therm/base.c
+@@ -32,6 +32,24 @@
+ 	if (therm->func->temp_get)
+ 		return therm->func->temp_get(therm);
+ 	return -ENODEV;
++}
++
++int
++nvkm_therm_pwm_get(struct nvkm_therm *therm, int line, u32 *divs, u32 *duty)
++{
++	if (!therm || !divs || !duty)
++		return -EINVAL;
++	if (!therm->func || !therm->func->pwm_get)
++		return -ENODEV;
++	return therm->func->pwm_get(therm, line, divs, duty);
++}
++
++int
++nvkm_therm_pwm_clock(struct nvkm_therm *therm, int line)
++{
++	if (!therm || !therm->func || !therm->func->pwm_clock)
++		return -ENODEV;
++	return therm->func->pwm_clock(therm, line);
+ }
+ 
+ static int
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/volt/gf117.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/volt/gf117.c
+@@ -27,11 +27,47 @@
+ #include <subdev/bios/volt.h>
+ #include <subdev/fuse.h>
+ #include <subdev/gpio.h>
++#include <subdev/therm.h>
++
++#include <linux/math64.h>
+ 
+ struct gf117_volt {
+ 	struct nvkm_volt base;
+ 	struct nvbios_volt bios;
++	u8 pwm_line;
+ };
++
++static int
++gf117_volt_pwm_get(struct nvkm_volt *base)
++{
++	struct gf117_volt *volt = container_of(base, struct gf117_volt, base);
++	struct nvkm_device *device = base->subdev.device;
++	u32 divs, duty, expected_min, expected_max;
++	u64 uv;
++	int ret, clock;
++
++	if (!device->therm || !volt->bios.pwm_freq || !volt->bios.pwm_range)
++		return -ENODEV;
++
++	ret = nvkm_therm_pwm_get(device->therm, volt->pwm_line, &divs, &duty);
++	if (ret)
++		return ret;
++	if (!divs || duty > divs)
++		return -ERANGE;
++
++	clock = nvkm_therm_pwm_clock(device->therm, volt->pwm_line);
++	if (clock <= 0)
++		return -ENODEV;
++	expected_min = clock / volt->bios.pwm_freq;
++	expected_max = expected_min + !!(clock % volt->bios.pwm_freq);
++	if (!expected_max || divs < expected_min || divs > expected_max)
++		return -ERANGE;
++
++	uv = volt->bios.base + div_u64((u64)volt->bios.pwm_range * duty, divs);
++	if (uv > INT_MAX)
++		return -ERANGE;
++	return uv;
++}
+ 
+ static int
+ gf117_volt_speedo_read(struct nvkm_volt *volt)
+@@ -52,6 +88,12 @@
+ 	.speedo_read = gf117_volt_speedo_read,
+ };
+ 
++static const struct nvkm_volt_func gf117_volt_pwm = {
++	.oneinit = gf100_volt_oneinit,
++	.volt_get = gf117_volt_pwm_get,
++	.speedo_read = gf117_volt_speedo_read,
++};
++
+ int
+ gf117_volt_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
+ 	       struct nvkm_volt **pvolt)
+@@ -59,16 +101,23 @@
+ 	const struct nvkm_volt_func *func = &gf117_volt_gpio;
+ 	struct gf117_volt *volt;
+ 	struct nvbios_volt bios;
++	struct dcb_gpio_func gpio;
+ 	u8 ver, hdr, cnt, len;
++	bool pwm = false;
+ 	int ret = 0;
+ 	*pvolt = NULL;
+ 
+ 	if (device->bios &&
+ 	    nvbios_volt_parse(device->bios, &ver, &hdr, &cnt, &len, &bios) &&
+ 	    bios.type == NVBIOS_VOLT_PWM) {
+-		/* GF117 PWM register layout/readback is unverified. Do not mistake
+-		 * GPIO VID or another chipset's PWM registers for voltage. */
+-		return 0;
++		/* GF117 uses the GF119 thermal PWM router. Only expose PWM voltage
++		 * readback when the VBIOS explicitly maps a PWM VID GPIO line. */
++		if (!device->gpio || !bios.pwm_freq || !bios.pwm_range ||
++		    nvkm_gpio_find(device->gpio, 0, DCB_GPIO_VID_PWM, 0xff, &gpio) ||
++		    !gpio.param || gpio.line >= 32)
++			return 0;
++		func = &gf117_volt_pwm;
++		pwm = true;
+ 	}
+ 
+ 	volt = kzalloc_obj(*volt);
+@@ -76,7 +125,12 @@
+ 		return -ENOMEM;
+ 	nvkm_volt_ctor(func, device, type, inst, &volt->base);
+ 	*pvolt = &volt->base;
+-	ret = nvkm_voltgpio_init(&volt->base);
++	if (pwm) {
++		volt->bios = bios;
++		volt->pwm_line = gpio.line;
++	} else {
++		ret = nvkm_voltgpio_init(&volt->base);
++	}
+ 
+ 	return ret;
+ }

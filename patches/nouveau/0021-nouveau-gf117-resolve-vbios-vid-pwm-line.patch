@@ -1,0 +1,87 @@
+From: Codex <codex@openai.com>
+Subject: [PATCH] nouveau: resolve GF117 VID_PWM line from VBIOS
+
+The diagnostic previously read GPIO line 11 unconditionally. Resolve the
+DCB VID_PWM function first and read the GF119 mux register for that actual
+line. This keeps the probe useful across VBIOS variants without associating
+an unrelated GPIO with voltage control. The output reports lookup failure
+explicitly; no GPIO or PWM register is written.
+
+--- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c
++++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+@@ -32,6 +32,7 @@
+ #include <nvif/class.h>
+ #include <nvif/if0001.h>
+ #include <subdev/fb/ram.h>
++#include <subdev/gpio.h>
+ #include <subdev/volt.h>
+ #include "nouveau_debugfs.h"
+ #include "nouveau_drv.h"
+@@ -233,26 +234,39 @@
+ 			seq_printf(m, "state=%d voltage_limit_uv=%d vid_mask=%u vid_count=%u\n",
+ 				   state, limit_uv, volt ? volt->vid_mask : 0,
+ 				   volt ? volt->vid_nr : 0);
+-			/* GF117 uses gf119_therm_new(). Expose the documented GF119 PWM
+-			 * channel candidates read-only; the GK104 voltage pair is unrelated. */
++			/* GF117 uses gf119_therm_new(). Resolve the VBIOS VID_PWM line,
++			 * then expose GF119 PWM channel candidates read-only. The GK104
++			 * voltage pair is unrelated. */
+ 			{
+-				u32 gpio11 = nvif_rd32(&ndrm->client.device.object, 0x00d63c);
++				struct dcb_gpio_func vid_pwm;
++				struct nvkm_gpio *gpio = nvxx_gpio(ndrm);
++				u32 gpio_value = 0;
+ 				u32 div = 0, duty = 0;
+ 				int pwm_index = -1;
+ 				int pwm_enabled = 0;
+-
+-				if ((gpio11 & 0x000000c0) == 0x00000000 ||
+-				    (gpio11 & 0x000000c0) == 0x00000040) {
+-					switch (gpio11 & 0x0000001f) {
+-					case 0x00: case 0x1e: pwm_index = 2; break;
+-					case 0x19: pwm_index = 1; break;
+-					case 0x1c: pwm_index = 0; break;
+-					default: break;
+-				}
++				int gpio_line = -1;
++				int gpio_ret = gpio ? nvkm_gpio_find(gpio, 0, DCB_GPIO_VID_PWM,
++								    0xff, &vid_pwm) : -ENODEV;
++
++				if (!gpio_ret && vid_pwm.line >= 32)
++					gpio_ret = -ERANGE;
++				if (!gpio_ret) {
++					gpio_line = vid_pwm.line;
++					gpio_value = nvif_rd32(&ndrm->client.device.object,
++							      0x00d610 + gpio_line * 4);
++					if ((gpio_value & 0x000000c0) == 0x00000000 ||
++					    (gpio_value & 0x000000c0) == 0x00000040) {
++						switch (gpio_value & 0x0000001f) {
++						case 0x00: case 0x1e: pwm_index = 2; break;
++						case 0x19: pwm_index = 1; break;
++						case 0x1c: pwm_index = 0; break;
++						default: break;
++						}
++					}
+ 				}
+ 				/* GF119 PWM 0/1 reads require GPIO's Nvio special-mode bit. */
+ 				if (pwm_index == 2 ||
+-				    (pwm_index >= 0 && (gpio11 & 0x000000c0) == 0x00000040)) {
++				    (pwm_index >= 0 && (gpio_value & 0x000000c0) == 0x00000040)) {
+ 					switch (pwm_index) {
+ 					case 0:
+ 						div = nvif_rd32(&ndrm->client.device.object, 0x00e114);
+@@ -271,9 +285,11 @@
+ 					}
+ 					pwm_enabled = 1;
+ 				}
+-				seq_printf(m, "gf117_pwm_diag gpio_line11=%08x pwm_index=%d "
+-					   "pwm_enabled=%d selected=%08x/%08x\n",
+-					   gpio11, pwm_index, pwm_enabled, div, duty);
++				seq_printf(m, "gf117_pwm_diag vbios_vid_pwm_line=%d "
++					   "gpio=%08x pwm_index=%d pwm_enabled=%d "
++					   "selected=%08x/%08x gpio_lookup=%d\n",
++					   gpio_line, gpio_value, pwm_index, pwm_enabled,
++					   div, duty, gpio_ret);
+ 			}
+ 		}
+ 
