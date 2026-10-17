@@ -19,12 +19,14 @@ case "${1:-}" in
 esac
 [[ $EUID == 0 ]] || { echo "Execute como root (ou invoque com sudo)." >&2; exit 2; }
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+caller_home=$(getent passwd "${SUDO_UID:-$(id -u)}" | cut -d: -f6)
+caller_home=${caller_home:-$HOME}
 repo_root=${GF117_REPO_ROOT:-}
 if [[ -z "$repo_root" ]]; then
     if [[ -d "$script_dir/../artifacts" ]]; then
         repo_root=$(cd "$script_dir/.." && pwd)
-    elif [[ -d "$HOME/Nvidia-GT720M-Fix-atualizado/artifacts" ]]; then
-        repo_root="$HOME/Nvidia-GT720M-Fix-atualizado"
+    elif [[ -d "$caller_home/Nvidia-GT720M-Fix-atualizado/artifacts" ]]; then
+        repo_root="$caller_home/Nvidia-GT720M-Fix-atualizado"
     else
         echo "Checkout GF117 não encontrado; defina GF117_REPO_ROOT." >&2
         exit 1
@@ -37,9 +39,9 @@ debugfs=/sys/kernel/debug/dri/0000:08:00.0
 hwmon_root=/sys/class/hwmon
 temperature_path=
 temperature_source=
-log_dir=${GF117_TEST_LOG_DIR:-$HOME/teste-logs}
+log_dir=${GF117_TEST_LOG_DIR:-$caller_home/teste-logs}
 loaded_srcversion_path=/sys/module/nouveau/srcversion
-home_owner=$(stat -c '%u:%g' "$HOME")
+home_owner=$(stat -c '%u:%g' "$caller_home")
 install -d -m 0755 -o "${home_owner%:*}" -g "${home_owner#*:}" "$log_dir"
 log_file="$log_dir/clock-$(date +%Y%m%d-%H%M%S-%N).log"
 touch "$log_file"; chown "$home_owner" "$log_file"; chmod 0644 "$log_file"
