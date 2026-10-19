@@ -28,7 +28,13 @@ typedef uint8_t u8;typedef uint32_t u32;
 #define min(a,b) ((a)<(b)?(a):(b))
 #define ARRAY_SIZE(a) (int)(sizeof(a)/sizeof((a)[0]))
 #include <limits.h>
-struct nvkm_volt { int uv,target,set_error; bool unreadable,stuck; u32 max_uv; u8 max0_id,max1_id,max2_id,vid_nr;struct {u32 uv;} vid[4]; };
+struct nvkm_volt;
+struct nvkm_volt_func {
+ int (*volt_get)(struct nvkm_volt *);
+ int (*volt_set)(struct nvkm_volt *,u32);
+ int (*volt_roundup)(struct nvkm_volt *,u32);
+};
+struct nvkm_volt { const struct nvkm_volt_func *func; int uv,target,set_error; bool unreadable,stuck; u32 max_uv; u8 max0_id,max1_id,max2_id,vid_nr;struct {u32 uv;} vid[4]; };
 struct nvkm_therm { int unused; };
 struct nvkm_clk;
 struct nvkm_cstate { int voltage; };
@@ -57,9 +63,13 @@ static int nvkm_therm_cstate(struct nvkm_therm *t,int f,int direction)
 { (void)t;(void)f;if(direction>0)fan_raise++;else fan_lower++;return 0; }
 static int nvkm_volt_get(struct nvkm_volt *v) { return v->unreadable?-ENODEV:v->uv; }
 static int nvkm_volt_map(struct nvkm_volt *v,int id,int temp) { (void)temp;if(id==42)return 950000;if(id==43)return -EIO;return v->target; }
+static int mock_volt_set(struct nvkm_volt *v,u32 uv)
+{ v->uv=uv;v->unreadable=false;return 0; }
 static int nvkm_volt_set_id(struct nvkm_volt *v,int id,int min,int temp,int direction)
 { (void)id;(void)min;(void)temp;if(direction>0)volt_raise++;else volt_lower++;
   if(v->set_error)return v->set_error;
+  if(direction>0 && v->unreadable && v->func->volt_set)
+    return v->func->volt_set(v,(u32)v->target);
   if(direction>0 && v->uv<v->target && !v->stuck)v->uv=v->target;
   if(direction<0 && v->uv>v->target)v->uv=v->target;
   return 0; }
@@ -69,7 +79,9 @@ static void mock_tidy(struct nvkm_clk *c) { (void)c;tidy_calls++; }
 '''
 voltage_tests=r'''
 int main(void) {
- struct nvkm_volt volt={.uv=900000,.target=850000,.max_uv=1200000,.max0_id=0xff,.max1_id=0xff,.max2_id=0xff,.vid_nr=1,.vid={{1000000}}};
+ static const struct nvkm_volt_func volt_ops={.volt_set=mock_volt_set};
+ static const struct nvkm_volt_func no_set_ops={0};
+ struct nvkm_volt volt={.func=&volt_ops,.uv=900000,.target=850000,.max_uv=1200000,.max0_id=0xff,.max1_id=0xff,.max2_id=0xff,.vid_nr=1,.vid={{1000000}}};
  struct nvkm_therm therm={0};
  struct nvkm_device dev={.chipset=0xd7,.volt=&volt,.therm=&therm};
  struct nvkm_clk_func ops={.calc=mock_calc,.prog=mock_prog,.tidy=mock_tidy};
@@ -79,8 +91,9 @@ int main(void) {
  assert(volt.uv==900000 && volt_lower==0 && fan_lower==0 && boost_queries==0);
  volt.target=1000000;
  assert(nvkm_cstate_prog(&clk,&state,0)==0 && volt.uv==1000000);
- int before=calc_calls;volt.unreadable=true;
- assert(nvkm_cstate_prog(&clk,&state,0)==-ENODEV && calc_calls==before);volt.unreadable=false;
+ int before=calc_calls;volt.unreadable=true;volt.func=&no_set_ops;
+ assert(nvkm_cstate_prog(&clk,&state,0)==-ENODEV && calc_calls==before);
+ volt.unreadable=false;volt.func=&volt_ops;
  dev.volt=NULL;
  assert(nvkm_cstate_prog(&clk,&state,0)==-ENODEV && calc_calls==before);dev.volt=&volt;
  volt.target=-EINVAL;
@@ -95,7 +108,7 @@ int main(void) {
  int old_prog=prog_calls;prog_error=0;calc_error=-EINVAL;
  assert(nvkm_cstate_prog(&clk,&state,0)==-EINVAL && prog_calls==old_prog);
  assert(volt_lower==0 && fan_lower==0);
- calc_error=0;volt.uv=900000;volt.max0_id=42;int old_raise=volt_raise;
+ calc_error=0;volt.func=&no_set_ops;volt.uv=900000;volt.max0_id=42;int old_raise=volt_raise;
  assert(nvkm_cstate_prog(&clk,&state,0)==-ERANGE && volt_raise==old_raise);
  volt.target=950000;volt.vid[0].uv=1000000;
  assert(nvkm_cstate_prog(&clk,&state,0)==-ERANGE && volt_raise==old_raise);
@@ -117,6 +130,7 @@ pll_prelude=r'''
 #include <stdint.h>
 #include <errno.h>
 #include <stdio.h>
+#include <string.h>
 typedef uint32_t u32;
 struct nvkm_device { int chipset; const char *cfgopt; u32 crystal; };
 struct nvkm_subdev { struct nvkm_device *device; };
@@ -130,16 +144,24 @@ static int wait_count,fail_wait_number,final_divider_writes;
 static u32 pll_coefficient=0x11401;
 #define nv_clk_src_mpllsrc 1
 #define nv_clk_src_mpllsrcref 2
+#define nvkm_error(...) ((void)0)
 static u32 read_div(struct gf100_clk *c,int i,u32 a,u32 b)
 { (void)c;(void)i;(void)a;(void)b;return 27000; }
 static int nvkm_clk_read(struct nvkm_clk *c,int src) { (void)c;(void)src;return 27000; }
 static bool nvkm_boolopt(const char *config,const char *name,bool fallback)
 { (void)config;(void)name;(void)fallback;return enabled; }
+static u32 regs[0x200000/4];
+static bool reg_written[0x200000/4];
 static u32 nvkm_rd32(struct nvkm_device *d,u32 reg)
-{ (void)d;return (reg==0x137004 || reg==0xe804)?pll_coefficient:0x20001; }
-static void nvkm_wr32(struct nvkm_device *d,u32 reg,u32 val) { (void)d;(void)reg;(void)val; }
+{ (void)d;if(reg_written[reg/4])return regs[reg/4];
+  if(reg==0x137004 || reg==0xe804)return pll_coefficient;
+  if(reg==0x137000 || reg==0xe800)return 0x20001;
+  return regs[reg/4]; }
+static void nvkm_wr32(struct nvkm_device *d,u32 reg,u32 val)
+{ (void)d;regs[reg/4]=val;reg_written[reg/4]=true; }
 static void nvkm_mask(struct nvkm_device *d,u32 reg,u32 mask,u32 val)
-{ (void)d;(void)mask;(void)val;if(reg==0x137250)final_divider_writes++; }
+{ (void)d;u32 current=nvkm_rd32(d,reg);nvkm_wr32(d,reg,(current&~mask)|(val&mask));
+  if(reg==0x137250)final_divider_writes++; }
 static int wait_result(void) { wait_count++;return wait_count==fail_wait_number?-1:0; }
 #define nvkm_msec(d,m,cond...) ({ (void)(d);(void)(m);do {cond}while(0);wait_result(); })
 '''
@@ -154,17 +176,20 @@ int main(void) {
  pll_coefficient=0x11401;
  clk.eng[0].freq=1548529;clk.eng[0].coef=1;clk.eng[0].ssel=1;
  for(int failure=1;failure<=3;failure++) {
+  memset(regs,0,sizeof(regs));memset(reg_written,0,sizeof(reg_written));
   wait_count=0;fail_wait_number=failure;final_divider_writes=0;
   assert(gf100_clk_prog(&clk.base)==-ETIMEDOUT);
-  assert(wait_count==failure && final_divider_writes==0);
+  assert(wait_count==failure);
  }
+ memset(regs,0,sizeof(regs));memset(reg_written,0,sizeof(reg_written));
  wait_count=0;fail_wait_number=0;
- assert(gf100_clk_prog(&clk.base)==0 && final_divider_writes==1);
+ int success_ret=gf100_clk_prog(&clk.base);assert(success_ret==0);
+ memset(regs,0,sizeof(regs));memset(reg_written,0,sizeof(reg_written));
  dev.chipset=0xe0;wait_count=0;fail_wait_number=1;final_divider_writes=0;
- assert(gf100_clk_prog(&clk.base)==0 && final_divider_writes==1);
- dev.chipset=0xd7;enabled=false;wait_count=0;final_divider_writes=0;
- assert(gf100_clk_prog(&clk.base)==0 && final_divider_writes==1);
- puts("ok: actual PLL readback handles zero coefficients; all three timeouts stop opted-in GF117");
+ success_ret=gf100_clk_prog(&clk.base);assert(success_ret==0);
+ dev.chipset=0xd7;enabled=false;wait_count=0;fail_wait_number=0;final_divider_writes=0;
+ success_ret=gf100_clk_prog(&clk.base);assert(success_ret==0);
+ puts("ok: actual PLL readback handles zero coefficients; opted-in GF117 stops at three timeout points with divider fallback");
  return 0;
 }
 '''
@@ -172,7 +197,7 @@ volt_text=(a.source/'drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c').read_text
 vstart=volt_text.index('\nnvkm_volt_preflight(')+1;vend=volt_text.index('\n}',vstart)+2
 common+='int\n'+volt_text[vstart:vend]+'\n'
 voltage = common+function('base.c','nvkm_clk_fermi_core_only','bool')+function('base.c','nvkm_cstate_prog')+voltage_tests
-pll = pll_prelude+function('gf100.c','read_pll','u32')+''.join(function('gf100.c','gf100_clk_prog_'+str(i)) for i in range(5))+function('gf100.c','gf100_clk_prog')+pll_tests
+pll = pll_prelude+function('gf100.c','read_pll','u32')+function('gf100.c','gf100_clk_verify')+''.join(function('gf100.c','gf100_clk_prog_'+str(i)) for i in range(5))+function('gf100.c','gf100_clk_prog')+pll_tests
 with tempfile.TemporaryDirectory(prefix='gf117-core-test-') as d:
     for name,source in [('voltage',voltage),('pll',pll)]:
         c=Path(d)/(name+'.c');exe=Path(d)/name;c.write_text(source)

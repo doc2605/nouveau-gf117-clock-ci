@@ -1,0 +1,61 @@
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/device/base.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/device/base.c
+@@ -1548,6 +1548,7 @@
+ 	.mmu      = { 0x00000001, gf100_mmu_new },
+ 	.mxm      = { 0x00000001, nv50_mxm_new },
+ 	.pci      = { 0x00000001, gf106_pci_new },
++	.pmu      = { 0x00000001, gf117_pmu_new },
+ 	.privring = { 0x00000001, gf117_privring_new },
+ 	.therm    = { 0x00000001, gf119_therm_new },
+ 	.timer    = { 0x00000001, nv41_timer_new },
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/Kbuild
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/Kbuild
+@@ -3,6 +3,7 @@
+ nvkm-y += nvkm/subdev/pmu/memx.o
+ nvkm-y += nvkm/subdev/pmu/gt215.o
+ nvkm-y += nvkm/subdev/pmu/gf100.o
++nvkm-y += nvkm/subdev/pmu/gf117.o
+ nvkm-y += nvkm/subdev/pmu/gf119.o
+ nvkm-y += nvkm/subdev/pmu/gk104.o
+ nvkm-y += nvkm/subdev/pmu/gk110.o
+--- a/drivers/gpu/drm/nouveau/include/nvkm/subdev/pmu.h
++++ b/drivers/gpu/drm/nouveau/include/nvkm/subdev/pmu.h
+@@ -44,6 +44,7 @@
+ 
+ int gt215_pmu_new(struct nvkm_device *, enum nvkm_subdev_type, int inst, struct nvkm_pmu **);
+ int gf100_pmu_new(struct nvkm_device *, enum nvkm_subdev_type, int inst, struct nvkm_pmu **);
++int gf117_pmu_new(struct nvkm_device *, enum nvkm_subdev_type, int inst, struct nvkm_pmu **);
+ int gf119_pmu_new(struct nvkm_device *, enum nvkm_subdev_type, int inst, struct nvkm_pmu **);
+ int gk104_pmu_new(struct nvkm_device *, enum nvkm_subdev_type, int inst, struct nvkm_pmu **);
+ int gk110_pmu_new(struct nvkm_device *, enum nvkm_subdev_type, int inst, struct nvkm_pmu **);
+--- /dev/null
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/gf117.c
+@@ -0,0 +1,28 @@
++/* SPDX-License-Identifier: MIT */
++/*
++ * Experimental GF117 PMU binding.  This deliberately reuses the GF100 FUC3
++ * image only behind an explicit NVKM option.  No GF117 Falcon boot or firmware
++ * compatibility has been validated; keep the default path unregistered.
++ */
++#include "priv.h"
++
++#include <core/option.h>
++
++int gf100_pmu_new(struct nvkm_device *, enum nvkm_subdev_type, int,
++		  struct nvkm_pmu **);
++
++int
++gf117_pmu_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
++	      struct nvkm_pmu **ppmu)
++{
++	if (!ppmu)
++		return -EINVAL;
++	*ppmu = NULL;
++
++	/* The GF117 dispatch entry is present for this opt-in gate only. */
++	if (!device || device->chipset != 0xd7 ||
++	    !nvkm_boolopt(device->cfgopt, "NvGf117Pmu", false))
++		return -ENODEV;
++
++	return gf100_pmu_new(device, type, inst, ppmu);
++}

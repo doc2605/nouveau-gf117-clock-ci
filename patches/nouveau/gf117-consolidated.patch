@@ -1,0 +1,2794 @@
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/dispnv04/hw.h b/drivers/gpu/drm/nouveau/dispnv04/hw.h
+--- a/drivers/gpu/drm/nouveau/dispnv04/hw.h	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/dispnv04/hw.h	2026-10-17 05:17:21.414332135 -0300
+@@ -120,6 +120,13 @@
+ 					int head, uint8_t index, uint8_t value)
+ {
+ 	struct nvif_object *device = &nouveau_drm(dev)->client.device.object;
++	/* GF117 has no legacy display CRTC. NVIF MMIO bypasses NVKM VGA helpers. */
++	if (nouveau_drm(dev)->client.device.info.chipset == 0xd7) {
++		pr_warn_once("nouveau GF117: blocked DRM NVWriteVgaCrtc head=%d index=%02x value=%02x\n",
++			     head, index, value);
++		return;
++	}
++
+ 	nvif_wr08(device, NV_PRMCIO_CRX__COLOR + head * NV_PRMCIO_SIZE, index);
+ 	nvif_wr08(device, NV_PRMCIO_CR__COLOR + head * NV_PRMCIO_SIZE, value);
+ }
+@@ -129,6 +136,13 @@
+ {
+ 	struct nvif_object *device = &nouveau_drm(dev)->client.device.object;
+ 	uint8_t val;
++	/* GF117 has no legacy display CRTC. NVIF MMIO bypasses NVKM VGA helpers. */
++	if (nouveau_drm(dev)->client.device.info.chipset == 0xd7) {
++		pr_warn_once("nouveau GF117: blocked DRM NVReadVgaCrtc head=%d index=%02x\n",
++			     head, index);
++		return 0;
++	}
++
+ 	nvif_wr08(device, NV_PRMCIO_CRX__COLOR + head * NV_PRMCIO_SIZE, index);
+ 	val = nvif_rd08(device, NV_PRMCIO_CR__COLOR + head * NV_PRMCIO_SIZE);
+ 	return val;
+@@ -312,7 +326,11 @@
+ NVLockVgaCrtcs(struct drm_device *dev, bool lock)
+ {
+ 	struct nouveau_drm *drm = nouveau_drm(dev);
+-	bool waslocked = !NVReadVgaCrtc(dev, 0, NV_CIO_SR_LOCK_INDEX);
++	bool waslocked;
++
++	if (drm->client.device.info.chipset == 0xd7)
++		return false;
++	waslocked = !NVReadVgaCrtc(dev, 0, NV_CIO_SR_LOCK_INDEX);
+ 
+ 	NVWriteVgaCrtc(dev, 0, NV_CIO_SR_LOCK_INDEX,
+ 		       lock ? NV_CIO_SR_LOCK_VALUE : NV_CIO_SR_UNLOCK_RW_VALUE);
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/include/nvif/client.h b/drivers/gpu/drm/nouveau/include/nvif/client.h
+--- a/drivers/gpu/drm/nouveau/include/nvif/client.h	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/include/nvif/client.h	2026-10-17 14:05:28.557084868 -0300
+@@ -7,6 +7,7 @@
+ struct nvif_client {
+ 	struct nvif_object object;
+ 	const struct nvif_driver *driver;
++	u16 chipset;
+ };
+ 
+ int  nvif_client_ctor(struct nvif_client *parent, const char *name, struct nvif_client *);
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/include/nvif/object.h b/drivers/gpu/drm/nouveau/include/nvif/object.h
+--- a/drivers/gpu/drm/nouveau/include/nvif/object.h	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/include/nvif/object.h	2026-10-17 14:16:15.917943395 -0300
+@@ -19,6 +19,8 @@
+ 	struct nvif_map {
+ 		void __iomem *ptr;
+ 		u64 size;
++		u16 chipset;
++		bool is_pri; /* addr is an absolute register offset only on full PRI maps. */
+ 	} map;
+ };
+ 
+@@ -44,12 +46,38 @@
+ #define nvif_handle(a) (unsigned long)(void *)(a)
+ #define nvif_object(a) (a)->object
+ 
++static inline bool
++nvif_gf117_legacy_crtc_access(struct nvif_map *map, u32 addr, u32 size)
++{
++	u32 end = addr + size - 1;
++	static const u32 regs[] = { 0x6013d4, 0x6013d5, 0x6033d4, 0x6033d5 };
++	int i;
++
++	if (map->chipset != 0xd7 || !map->is_pri || !size || end < addr)
++		return false;
++
++	for (i = 0; i < ARRAY_SIZE(regs); i++) {
++		if (addr <= regs[i] && end >= regs[i]) {
++			pr_warn_once("nouveau GF117: blocked NVIF legacy CRTC MMIO at %06x caller=%pS\n",
++				    regs[i], __builtin_return_address(0));
++			return true;
++		}
++	}
++	return false;
++}
++
+ #define nvif_rd(a,f,b,c) ({                                                    \
+-	u32 _data = f((u8 __iomem *)(a)->map.ptr + (c));                       \
+-	_data;                                                                 \
++	typeof(a) _nvif_object = (a);                                          \
++	u32 _nvif_addr = (c), _nvif_data = 0;                                   \
++	if (!nvif_gf117_legacy_crtc_access(&_nvif_object->map, _nvif_addr, (b)))  \
++		_nvif_data = f((u8 __iomem *)_nvif_object->map.ptr + _nvif_addr); \
++	_nvif_data;                                                            \
+ })
+ #define nvif_wr(a,f,b,c,d) ({                                                  \
+-	f((d), (u8 __iomem *)(a)->map.ptr + (c));                              \
++	typeof(a) _nvif_object = (a);                                          \
++	u32 _nvif_addr = (c);                                                   \
++	if (!nvif_gf117_legacy_crtc_access(&_nvif_object->map, _nvif_addr, (b)))  \
++		f((d), (u8 __iomem *)_nvif_object->map.ptr + _nvif_addr);        \
+ })
+ #define nvif_rd08(a,b) ({ ((u8)nvif_rd((a), ioread8, 1, (b))); })
+ #define nvif_rd16(a,b) ({ ((u16)nvif_rd((a), ioread16_native, 2, (b))); })
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/include/nvkm/core/device.h b/drivers/gpu/drm/nouveau/include/nvkm/core/device.h
+--- a/drivers/gpu/drm/nouveau/include/nvkm/core/device.h	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/include/nvkm/core/device.h	2026-10-17 14:28:36.834099857 -0300
+@@ -125,9 +125,35 @@
+ #define nvkm_rd08(d,a) ioread8((d)->pri + (a))
+ #define nvkm_rd16(d,a) ioread16_native((d)->pri + (a))
+ #define nvkm_rd32(d,a) ioread32_native((d)->pri + (a))
+-#define nvkm_wr08(d,a,v) iowrite8((v), (d)->pri + (a))
+-#define nvkm_wr16(d,a,v) iowrite16_native((v), (d)->pri + (a))
+-#define nvkm_wr32(d,a,v) iowrite32_native((v), (d)->pri + (a))
++static inline void nvkm_wr08(struct nvkm_device *device, u32 addr, u8 value)
++{
++	/* GF117 Optimus has no legacy display CRTC. Catch callers which bypass
++	 * the VGA and VBIOS helpers, so they cannot fault on its absent block. */
++	if (unlikely(device->chipset == 0xd7 && (addr & ~3U) == 0x6013d4)) {
++		pr_warn_once("nouveau GF117: blocked legacy CRTC MMIO write; caller %pS\n",
++			     __builtin_return_address(0));
++		return;
++	}
++	iowrite8(value, device->pri + addr);
++}
++static inline void nvkm_wr16(struct nvkm_device *device, u32 addr, u16 value)
++{
++	if (unlikely(device->chipset == 0xd7 && (addr & ~3U) == 0x6013d4)) {
++		pr_warn_once("nouveau GF117: blocked legacy CRTC MMIO write; caller %pS\n",
++			     __builtin_return_address(0));
++		return;
++	}
++	iowrite16_native(value, device->pri + addr);
++}
++static inline void nvkm_wr32(struct nvkm_device *device, u32 addr, u32 value)
++{
++	if (unlikely(device->chipset == 0xd7 && (addr & ~3U) == 0x6013d4)) {
++		pr_warn_once("nouveau GF117: blocked legacy CRTC MMIO write; caller %pS\n",
++			     __builtin_return_address(0));
++		return;
++	}
++	iowrite32_native(value, device->pri + addr);
++}
+ #define nvkm_mask(d,a,m,v) ({                                                  \
+ 	struct nvkm_device *_device = (d);                                     \
+ 	u32 _addr = (a), _temp = nvkm_rd32(_device, _addr);                    \
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/include/nvkm/subdev/clk.h b/drivers/gpu/drm/nouveau/include/nvkm/subdev/clk.h
+--- a/drivers/gpu/drm/nouveau/include/nvkm/subdev/clk.h	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/include/nvkm/subdev/clk.h	2026-10-17 05:17:21.401690119 -0300
+@@ -92,6 +92,8 @@
+ 	struct work_struct work;
+ 	wait_queue_head_t wait;
+ 	atomic_t waiting;
++	/* Experimental GF117 failures latch until device reconstruction. */
++	int fermi_reclock_error;
+ 
+ 	int pwrsrc;
+ 	int pstate; /* current */
+@@ -118,6 +120,8 @@
+ };
+ 
+ int nvkm_clk_read(struct nvkm_clk *, enum nv_clk_src);
++/* Read-only calculation; it never calls a prog or RAMFUC callback. */
++int nvkm_clk_dryrun(struct nvkm_clk *, int pstate, struct nvkm_cstate *);
+ int nvkm_clk_ustate(struct nvkm_clk *, int req, int pwr);
+ int nvkm_clk_astate(struct nvkm_clk *, int req, int rel, bool wait);
+ int nvkm_clk_dstate(struct nvkm_clk *, int req, int rel);
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/include/nvkm/subdev/fb.h b/drivers/gpu/drm/nouveau/include/nvkm/subdev/fb.h
+--- a/drivers/gpu/drm/nouveau/include/nvkm/subdev/fb.h	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/include/nvkm/subdev/fb.h	2026-10-17 05:17:21.384744522 -0300
+@@ -115,6 +115,19 @@
+ 	u32 freq;
+ };
+ 
++/* Read-only result from a RAM/VBIOS transition calculation. */
++struct nvkm_ram_dryrun {
++	u32 requested_khz;
++	u32 rounded_khz;
++	u32 ref_khz;
++	u8 rammap_ver;
++	u8 ramcfg_strap;
++	u8 timing_ver;
++	u8 timing_index;
++	bool timing_present;
++	const char *failure_stage;
++};
++
+ enum nvkm_ram_type {
+ 	NVKM_RAM_TYPE_UNKNOWN = 0,
+ 	NVKM_RAM_TYPE_STOLEN,
+@@ -176,6 +189,7 @@
+ 	int (*init)(struct nvkm_ram *);
+ 
+ 	int (*calc)(struct nvkm_ram *, u32 freq);
++	int (*dryrun)(struct nvkm_ram *, u32 freq, struct nvkm_ram_dryrun *);
+ 	int (*prog)(struct nvkm_ram *);
+ 	void (*tidy)(struct nvkm_ram *);
+ };
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/include/nvkm/subdev/therm.h b/drivers/gpu/drm/nouveau/include/nvkm/subdev/therm.h
+--- a/drivers/gpu/drm/nouveau/include/nvkm/subdev/therm.h	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/include/nvkm/subdev/therm.h	2026-10-17 17:48:37.633524899 -0300
+@@ -101,6 +101,11 @@
+ 
+ int nvkm_therm_temp_get(struct nvkm_therm *);
+ int nvkm_therm_fan_sense(struct nvkm_therm *);
++int nvkm_therm_pwm_get(struct nvkm_therm *, int line, u32 *divs, u32 *duty);
++int nvkm_therm_pwm_enabled(struct nvkm_therm *, int line);
++int nvkm_therm_pwm_ctrl(struct nvkm_therm *, int line, bool enable);
++int nvkm_therm_pwm_set(struct nvkm_therm *, int line, u32 divs, u32 duty);
++int nvkm_therm_pwm_clock(struct nvkm_therm *, int line);
+ int nvkm_therm_cstate(struct nvkm_therm *, int, int);
+ void nvkm_therm_clkgate_init(struct nvkm_therm *,
+ 			     const struct nvkm_therm_clkgate_pack *);
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/include/nvkm/subdev/volt.h b/drivers/gpu/drm/nouveau/include/nvkm/subdev/volt.h
+--- a/drivers/gpu/drm/nouveau/include/nvkm/subdev/volt.h	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/include/nvkm/subdev/volt.h	2026-10-17 05:17:21.404522307 -0300
+@@ -33,6 +33,9 @@
+ int nvkm_volt_map(struct nvkm_volt *volt, u8 id, u8 temperature);
+ int nvkm_volt_map_min(struct nvkm_volt *volt, u8 id);
+ int nvkm_volt_get(struct nvkm_volt *);
++/* Read-only GPIO-VID preflight used by the GF117 experiment. */
++int nvkm_volt_preflight(struct nvkm_volt *, u8 id, u8 temperature,
++			int *current_uv, int *limit_uv);
+ int nvkm_volt_set_id(struct nvkm_volt *, u8 id, u8 min_id, u8 temp,
+ 		     int condition);
+ 
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nouveau_debugfs.c b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+--- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c	2026-10-17 17:02:21.076814495 -0300
+@@ -31,6 +31,9 @@
+ #include <linux/debugfs.h>
+ #include <nvif/class.h>
+ #include <nvif/if0001.h>
++#include <subdev/fb/ram.h>
++#include <subdev/gpio.h>
++#include <subdev/volt.h>
+ #include "nouveau_debugfs.h"
+ #include "nouveau_drv.h"
+ 
+@@ -138,6 +141,191 @@
+ 	return 0;
+ }
+ 
++static int
++nouveau_debugfs_pstate_current_get(struct seq_file *m, void *data)
++{
++	struct drm_device *drm = m->private;
++	struct nouveau_debugfs *debugfs = nouveau_debugfs(drm);
++	struct nvif_control_pstate_attr_v0 attr = {
++		.state = NVIF_CONTROL_PSTATE_ATTR_V0_STATE_CURRENT,
++		.index = 0,
++	};
++	int ret;
++
++	if (!debugfs)
++		return -ENODEV;
++
++	do {
++		ret = nvif_mthd(&debugfs->ctrl, NVIF_CONTROL_PSTATE_ATTR,
++				&attr, sizeof(attr));
++		if (ret)
++			return ret;
++
++		seq_printf(m, "%s %d %s\n", attr.name, attr.min, attr.unit);
++	} while (attr.index);
++
++	return 0;
++}
++
++static int
++nouveau_debugfs_pstate_current_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, nouveau_debugfs_pstate_current_get,
++			   inode->i_private);
++}
++
++static const struct file_operations nouveau_pstate_current_fops = {
++	.owner = THIS_MODULE,
++	.open = nouveau_debugfs_pstate_current_open,
++	.read = seq_read,
++	.llseek = seq_lseek,
++	.release = single_release,
++};
++
++static int
++nouveau_debugfs_pstate_plan_get(struct seq_file *m, void *data)
++{
++	struct drm_device *drm = m->private;
++	struct nouveau_drm *ndrm = nouveau_drm(drm);
++	struct nvkm_clk *clk = nvxx_clk(ndrm);
++	struct nvkm_fb *fb = nvxx_fb(ndrm);
++	struct nvkm_pstate *pstate;
++	int i = 0;
++
++	if (!clk)
++		return -ENODEV;
++
++	seq_printf(m, "allow_reclock=%u states=%d current=%d\n",
++		   clk->allow_reclock, clk->state_nr, clk->pstate);
++	list_for_each_entry(pstate, &clk->states, head) {
++		struct nvkm_cstate cstate;
++		struct nvkm_ram_dryrun ram = {};
++		/* GF100's core domain is represented at 2x the physical GPC clock. */
++		u32 requested_core_khz =
++			pstate->base.domain[nv_clk_src_gpc] / 2;
++		u32 requested_memory = pstate->base.domain[nv_clk_src_mem];
++		int state = i++;
++		int ret = nvkm_clk_dryrun(clk, state, &cstate);
++		int ram_ret;
++		struct nvkm_volt *volt = nvxx_volt(ndrm);
++		int voltage_uv, target_uv, limit_uv = 0, voltage_ready;
++
++		if (ret) {
++			seq_printf(m, "state=%d dryrun_error=%d\n", state, ret);
++			continue;
++		}
++
++		ram_ret = fb && fb->ram ? nvkm_ram_dryrun(fb->ram, requested_memory,
++							 &ram) : -ENODEV;
++		seq_printf(m, "state=%d id=%u voltage=%u requested_core_khz=%u "
++			   "calculated_core_khz=%u requested_memory_khz=%u\n", state, cstate.id,
++			   cstate.voltage,
++			   requested_core_khz,
++			   cstate.domain[nv_clk_src_gpc] / 2,
++			   requested_memory);
++		if (nvxx_device(ndrm)->chipset == 0xd7) {
++			voltage_ready = nvkm_volt_preflight(volt, pstate->base.voltage,
++							clk->temp, &voltage_uv, &limit_uv) > 0;
++			target_uv = volt ? nvkm_volt_map(volt, pstate->base.voltage,
++							 clk->temp) : -ENODEV;
++			seq_printf(m, "state=%d voltage_uv=%d target_uv=%d voltage_ready=%d "
++				   "voltage_temp_c=%u\n", state, voltage_uv, target_uv,
++				   voltage_ready, clk->temp);
++			seq_printf(m, "state=%d voltage_limit_uv=%d vid_mask=%u vid_count=%u\n",
++				   state, limit_uv, volt ? volt->vid_mask : 0,
++				   volt ? volt->vid_nr : 0);
++			/* GF117 uses gf119_therm_new(). Resolve the VBIOS VID_PWM line,
++			 * then expose GF119 PWM channel candidates read-only. The GK104
++			 * voltage pair is unrelated. */
++			{
++				struct dcb_gpio_func vid_pwm;
++				struct nvkm_gpio *gpio = nvxx_gpio(ndrm);
++				u32 gpio_value = 0;
++				u32 div = 0, duty = 0;
++				int pwm_index = -1;
++				int pwm_route_valid = 0;
++				int gpio_line = -1;
++				int gpio_ret = gpio ? nvkm_gpio_find(gpio, 0, DCB_GPIO_VID_PWM,
++								    0xff, &vid_pwm) : -ENODEV;
++
++				if (!gpio_ret && vid_pwm.line >= 32)
++					gpio_ret = -ERANGE;
++				if (!gpio_ret) {
++					gpio_line = vid_pwm.line;
++					gpio_value = nvif_rd32(&ndrm->client.device.object,
++							      0x00d610 + gpio_line * 4);
++					if ((gpio_value & 0x000000c0) == 0x00000000 ||
++					    (gpio_value & 0x000000c0) == 0x00000040) {
++						switch (gpio_value & 0x0000001f) {
++						case 0x00: case 0x1e: pwm_index = 2; break;
++						case 0x19: pwm_index = 1; break;
++						case 0x1c: pwm_index = 0; break;
++						default: break;
++						}
++					}
++				}
++				/* GF119 PWM 0/1 reads require GPIO's Nvio special-mode bit. */
++				if (pwm_index == 2 ||
++				    (pwm_index >= 0 && (gpio_value & 0x000000c0) == 0x00000040)) {
++					switch (pwm_index) {
++					case 0:
++						div = nvif_rd32(&ndrm->client.device.object, 0x00e114);
++						duty = nvif_rd32(&ndrm->client.device.object, 0x00e118);
++						break;
++					case 1:
++						div = nvif_rd32(&ndrm->client.device.object, 0x00e11c);
++						duty = nvif_rd32(&ndrm->client.device.object, 0x00e120);
++						break;
++					case 2:
++						div = nvif_rd32(&ndrm->client.device.object, 0x0200d8);
++						duty = nvif_rd32(&ndrm->client.device.object, 0x0200dc);
++						break;
++					default:
++						break;
++					}
++					pwm_route_valid = 1;
++				}
++				seq_printf(m, "gf117_pwm_diag vbios_vid_pwm_line=%d "
++					   "gpio=%08x pwm_index=%d pwm_route_valid=%d "
++					   "selected=%08x/%08x gpio_lookup=%d\n",
++					   gpio_line, gpio_value, pwm_index, pwm_route_valid,
++					   div, duty, gpio_ret);
++			}
++		}
++
++		if (ram_ret)
++			seq_printf(m, "state=%d ram_dryrun_error=%d stage=%s "
++				   "rammap_ver=%u strap=%u timing_index=%u "
++				   "timing_ver=%u timing_present=%u\n",
++				   state, ram_ret,
++				   ram.failure_stage ?: "unavailable",
++				   ram.rammap_ver, ram.ramcfg_strap, ram.timing_index,
++				   ram.timing_ver, ram.timing_present);
++		else
++			seq_printf(m, "state=%d rammap_ver=%u strap=%u timing_ver=%u "
++				   "timing_present=%u ref_khz=%u rounded_memory=%u\n",
++				   state, ram.rammap_ver, ram.ramcfg_strap,
++				   ram.timing_ver, ram.timing_present, ram.ref_khz,
++				   ram.rounded_khz);
++	}
++	return 0;
++}
++
++static int
++nouveau_debugfs_pstate_plan_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, nouveau_debugfs_pstate_plan_get,
++			   inode->i_private);
++}
++
++static const struct file_operations nouveau_pstate_plan_fops = {
++	.owner = THIS_MODULE,
++	.open = nouveau_debugfs_pstate_plan_open,
++	.read = seq_read,
++	.llseek = seq_lseek,
++	.release = single_release,
++};
++
+ static ssize_t
+ nouveau_debugfs_pstate_set(struct file *file, const char __user *ubuf,
+ 			   size_t len, loff_t *offp)
+@@ -261,6 +449,8 @@
+ 	const struct file_operations *fops;
+ } nouveau_debugfs_files[] = {
+ 	{"pstate", &nouveau_pstate_fops},
++	{"pstate_current", &nouveau_pstate_current_fops},
++	{"pstate_plan", &nouveau_pstate_plan_fops},
+ };
+ 
+ void
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nouveau_drm.c b/drivers/gpu/drm/nouveau/nouveau_drm.c
+--- a/drivers/gpu/drm/nouveau/nouveau_drm.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nouveau_drm.c	2026-10-17 19:42:44.156153864 -0300
+@@ -276,6 +276,8 @@
+ 	}
+ 
+ 	cli->device.object.map.ptr = drm->device.object.map.ptr;
++	cli->device.object.map.chipset = drm->device.object.map.chipset;
++	cli->device.object.map.is_pri = drm->device.object.map.is_pri;
+ 
+ 	ret = nvif_mmu_ctor(&cli->device.object, "drmMmu", drm->mmu.object.oclass,
+ 			    &cli->mmu);
+@@ -349,7 +351,11 @@
+ 		return;
+ 	}
+ 
+-	ret = nouveau_channel_new(&drm->client, true, runm, NvDmaFB, NvDmaTT, &drm->cechan);
++	/* Fermi and earlier channel classes have no privileged RAMFC mode.
++	 * Requesting it is rejected by nvkm_chan_new_() before allocation. */
++	ret = nouveau_channel_new(&drm->client,
++				  device->info.family >= NV_DEVICE_INFO_V0_KEPLER,
++				  runm, NvDmaFB, NvDmaTT, &drm->cechan);
+ 	if (ret)
+ 		NV_ERROR(drm, "failed to create ce channel, %d\n", ret);
+ }
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvif/client.c b/drivers/gpu/drm/nouveau/nvif/client.c
+--- a/drivers/gpu/drm/nouveau/nvif/client.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvif/client.c	2026-10-17 14:05:28.560084888 -0300
+@@ -65,5 +65,6 @@
+ 	client->object.client = client;
+ 	client->object.handle = ~0;
+ 	client->driver = parent->driver;
++	client->chipset = parent->chipset;
+ 	return 0;
+ }
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvif/device.c b/drivers/gpu/drm/nouveau/nvif/device.c
+--- a/drivers/gpu/drm/nouveau/nvif/device.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvif/device.c	2026-10-17 14:16:15.918572804 -0300
+@@ -41,7 +41,12 @@
+ int
+ nvif_device_map(struct nvif_device *device)
+ {
+-	return nvif_object_map(&device->object, NULL, 0);
++	int ret = nvif_object_map(&device->object, NULL, 0);
++	if (!ret) {
++		device->object.map.chipset = device->info.chipset;
++		device->object.map.is_pri = true;
++	}
++	return ret;
+ }
+ 
+ void
+@@ -64,6 +69,8 @@
+ 		device->info.version = 0;
+ 		ret = nvif_object_mthd(&device->object, NV_DEVICE_V0_INFO,
+ 				       &device->info, sizeof(device->info));
++		if (!ret)
++			client->chipset = device->info.chipset;
+ 	}
+ 	return ret;
+ }
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvif/driver.c b/drivers/gpu/drm/nouveau/nvif/driver.c
+--- a/drivers/gpu/drm/nouveau/nvif/driver.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvif/driver.c	2026-10-17 14:05:28.560084888 -0300
+@@ -31,6 +31,7 @@
+ 	int ret;
+ 
+ 	client->driver = &nvif_driver_nvkm;
++	client->chipset = 0;
+ 
+ 	ret = client->driver->init(name, device, cfg, dbg, &client->object.priv);
+ 	if (ret)
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvif/object.c b/drivers/gpu/drm/nouveau/nvif/object.c
+--- a/drivers/gpu/drm/nouveau/nvif/object.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvif/object.c	2026-10-17 14:16:15.918324838 -0300
+@@ -178,6 +178,7 @@
+ 						      object->map.size);
+ 			object->map.size = 0;
+ 		}
++		object->map.is_pri = false;
+ 		object->map.ptr = NULL;
+ 		nvif_object_unmap_handle(object);
+ 	}
+@@ -190,16 +191,19 @@
+ 	u64 handle, length;
+ 	int ret = nvif_object_map_handle(object, argv, argc, &handle, &length);
+ 	if (ret >= 0) {
++		object->map.is_pri = false;
+ 		if (ret) {
+ 			object->map.ptr = client->driver->map(client,
+ 							      handle,
+ 							      length);
+ 			if (ret = -ENOMEM, object->map.ptr) {
+ 				object->map.size = length;
++				object->map.chipset = client->chipset;
+ 				return 0;
+ 			}
+ 		} else {
+ 			object->map.ptr = (void *)(unsigned long)handle;
++			object->map.chipset = client->chipset;
+ 			return 0;
+ 		}
+ 		nvif_object_unmap_handle(object);
+@@ -239,6 +243,8 @@
+ 	object->name = name ? name : "nvifObject";
+ 	object->handle = handle;
+ 	object->oclass = oclass;
++	object->map.chipset = 0;
++	object->map.is_pri = false;
+ 	object->map.ptr = NULL;
+ 	object->map.size = 0;
+ 
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/engine/disp/vga.c b/drivers/gpu/drm/nouveau/nvkm/engine/disp/vga.c
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/disp/vga.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/disp/vga.c	2026-10-17 05:17:21.413690019 -0300
+@@ -26,6 +26,9 @@
+ u8
+ nvkm_rdport(struct nvkm_device *device, int head, u16 port)
+ {
++	if (device->chipset == 0xd7 && (port == 0x03d4 || port == 0x03d5))
++		return 0;
++
+ 	if (device->card_type >= NV_50)
+ 		return nvkm_rd08(device, 0x601000 + port);
+ 
+@@ -48,6 +51,12 @@
+ void
+ nvkm_wrport(struct nvkm_device *device, int head, u16 port, u8 data)
+ {
++	if (device->chipset == 0xd7 && (port == 0x03d4 || port == 0x03d5)) {
++		pr_warn_once("nouveau GF117: blocked NVKM VGA CRTC port write: port=%04x data=%02x\n",
++			     port, data);
++		return;
++	}
++
+ 	if (device->card_type >= NV_50)
+ 		nvkm_wr08(device, 0x601000 + port, data);
+ 	else
+@@ -127,8 +136,15 @@
+ bool
+ nvkm_lockvgac(struct nvkm_device *device, bool lock)
+ {
+-	bool locked = !nvkm_rdvgac(device, 0, 0x1f);
++	bool locked;
+ 	u8 data = lock ? 0x99 : 0x57;
++
++	/* GF117 is a render-only Optimus GPU without display heads. Legacy
++	 * VGA CRTC accesses fault, including the index write in rdvgac(). */
++	if (device->chipset == 0xd7)
++		return false;
++
++	locked = !nvkm_rdvgac(device, 0, 0x1f);
+ 	if (device->card_type < NV_50)
+ 		nvkm_wrvgac(device, 0, 0x1f, data);
+ 	else
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/bios/vmap.c b/drivers/gpu/drm/nouveau/nvkm/subdev/bios/vmap.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/bios/vmap.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/bios/vmap.c	2026-10-17 05:17:21.411810156 -0300
+@@ -68,7 +68,9 @@
+ 	case 0x20:
+ 		info->max0 = nvbios_rd08(bios, vmap + 0x7);
+ 		info->max1 = nvbios_rd08(bios, vmap + 0x8);
+-		if (*len >= 0xc)
++		/* max2 lives in the table header at +0x0c, not in an entry.
++		 * A short header followed by a long entry must not fabricate an ID. */
++		if (*hdr >= 0x0d)
+ 			info->max2 = nvbios_rd08(bios, vmap + 0xc);
+ 		else
+ 			info->max2 = 0xff;
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/bus/gf100.c b/drivers/gpu/drm/nouveau/nvkm/subdev/bus/gf100.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/bus/gf100.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/bus/gf100.c	2026-10-17 05:17:21.397870242 -0300
+@@ -60,6 +60,18 @@
+ gf100_bus_init(struct nvkm_bus *bus)
+ {
+ 	struct nvkm_device *device = bus->subdev.device;
++	/* Preserve evidence before the normal init acknowledgement. A fault
++	 * inherited from the previous module must not look like a new access. */
++	if (device->chipset == 0xd7) {
++		u32 pending = nvkm_rd32(device, 0x001100) & 0x0000000e;
++
++		if (pending)
++			nvkm_warn(&bus->subdev,
++				  "pending MMIO fault before bus init: status=%08x addr=%08x data=%08x\n",
++				  pending, nvkm_rd32(device, 0x009084),
++				  nvkm_rd32(device, 0x009088));
++	}
++
+ 	nvkm_wr32(device, 0x001100, 0xffffffff);
+ 	nvkm_wr32(device, 0x001140, 0x0000000e);
+ }
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/base.c b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/base.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/base.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/base.c	2026-10-17 22:48:07.672305401 -0300
+@@ -29,11 +29,22 @@
+ #include <subdev/bios/perf.h>
+ #include <subdev/bios/vpstate.h>
+ #include <subdev/fb.h>
++#include <subdev/fb/ram.h>
+ #include <subdev/therm.h>
+ #include <subdev/volt.h>
+ 
+ #include <core/option.h>
+ 
++/* Explicit experimental mode: preserve memory's boot clock. */
++static bool
++nvkm_clk_fermi_core_only(struct nvkm_clk *clk)
++{
++	struct nvkm_device *device = clk->subdev.device;
++
++	return device->chipset == 0xd7 &&
++		nvkm_boolopt(device->cfgopt, "NvReclockFermiCoreOnly", false);
++}
++
+ /******************************************************************************
+  * misc
+  *****************************************************************************/
+@@ -164,9 +175,11 @@
+ 	struct nvkm_therm *therm = device->therm;
+ 	struct nvkm_volt *volt = device->volt;
+ 	struct nvkm_cstate *cstate;
+-	int ret;
++	bool core_only = nvkm_clk_fermi_core_only(clk);
++	int ret, target_uv = 0, current_uv, limit_uv = 0;
++	u8 temp = clk->temp;
+ 
+-	if (!list_empty(&pstate->list)) {
++	if (!core_only && !list_empty(&pstate->list)) {
+ 		cstate = nvkm_cstate_get(clk, pstate, cstatei);
+ 		cstate = nvkm_cstate_find_best(clk, pstate, cstate);
+ 		if (!cstate)
+@@ -175,6 +188,13 @@
+ 		cstate = &pstate->base;
+ 	}
+ 
++	if (core_only) {
++		target_uv = nvkm_volt_preflight(volt, cstate->voltage, temp,
++						&current_uv, &limit_uv);
++		if (target_uv <= 0)
++			return target_uv ? target_uv : -ERANGE;
++	}
++
+ 	if (therm) {
+ 		ret = nvkm_therm_cstate(therm, pstate->fanspeed, +1);
+ 		if (ret && ret != -ENODEV) {
+@@ -185,19 +205,30 @@
+ 
+ 	if (volt) {
+ 		ret = nvkm_volt_set_id(volt, cstate->voltage,
+-				       pstate->base.voltage, clk->temp, +1);
+-		if (ret && ret != -ENODEV) {
++				       pstate->base.voltage, core_only ? temp : clk->temp, +1);
++		if (ret && (core_only || ret != -ENODEV)) {
+ 			nvkm_error(subdev, "failed to raise voltage: %d\n", ret);
+ 			return ret;
+ 		}
+ 	}
+ 
++	if (core_only) {
++		current_uv = nvkm_volt_get(volt);
++		if (current_uv < target_uv || current_uv > limit_uv)
++			return -ERANGE;
++	}
++
+ 	ret = clk->func->calc(clk, cstate);
+ 	if (ret == 0) {
+ 		ret = clk->func->prog(clk);
+ 		clk->func->tidy(clk);
+ 	}
+ 
++	/* Core-only mode never lowers boot voltage or cooling. In particular,
++	 * keep voltage raised if a PLL switch fails; physical state is unknown. */
++	if (core_only)
++		return ret;
++
+ 	if (volt) {
+ 		int err = nvkm_volt_set_id(volt, cstate->voltage,
+ 					   pstate->base.voltage, clk->temp, -1);
+@@ -274,13 +305,71 @@
+ 	struct nvkm_pstate *pstate;
+ 	int ret, idx = 0;
+ 
++	if (pstatei < 0 || pstatei >= clk->state_nr)
++		return -EINVAL;
++
+ 	list_for_each_entry(pstate, &clk->states, head) {
+ 		if (idx++ == pstatei)
+ 			break;
+ 	}
+ 
++	if (nvkm_clk_fermi_core_only(clk)) {
++		struct nvkm_cstate plan;
++		int memory_before, memory_after, core_after;
++
++		/* Use the VBIOS state and existing core/voltage path only. No PCIe,
++		 * RAMFUC, memory PLL, memory timing or synthetic pstate writes. */
++		memory_before = nvkm_clk_read(clk, nv_clk_src_mem);
++		if (memory_before <= 0)
++			return -ENODEV;
++		ret = nvkm_clk_dryrun(clk, pstatei, &plan);
++		if (ret)
++			return ret;
++		if (!plan.domain[nv_clk_src_gpc])
++			return -ERANGE;
++		ret = nvkm_cstate_prog(clk, pstate, NVKM_CLK_CSTATE_HIGHEST);
++		if (ret) {
++			clk->pstate = -1;
++			return ret;
++		}
++		memory_after = nvkm_clk_read(clk, nv_clk_src_mem);
++		core_after = nvkm_clk_read(clk, nv_clk_src_gpc);
++		if (memory_after != memory_before || core_after <= 0 ||
++		    abs((s64)core_after - plan.domain[nv_clk_src_gpc]) >
++			plan.domain[nv_clk_src_gpc] / 100) {
++			clk->pstate = -1;
++			return -EIO;
++		}
++		clk->pstate = pstatei;
++		return 0;
++	}
++
++	/* The experimental GF117 opt-in must not continue to core/voltage
++	 * programming when memory cannot transition. The legacy path below
++	 * does not propagate RAM calculation failures to nvkm_cstate_prog(). */
++	if (subdev->device->chipset == 0xd7) {
++		struct nvkm_ram_dryrun plan = {};
++
++		/* The memory opt-in must not report a successful p-state if MEMX is
++		 * configured to discard its program instead of executing it. */
++		if (nvkm_boolopt(subdev->device->cfgopt, "NvReclockFermiMemory", false) &&
++		    !nvkm_boolopt(subdev->device->cfgopt, "NvMemExec", true))
++			return -EOPNOTSUPP;
++
++		if (!fb || !fb->ram)
++			return -ENODEV;
++		ret = nvkm_ram_dryrun(fb->ram,
++				     pstate->base.domain[nv_clk_src_mem], &plan);
++		if (ret) {
++			nvkm_error(subdev, "GF117 reclock preflight: %s (%d)\n",
++				   plan.failure_stage ?: "unavailable", ret);
++			return ret;
++		}
++	}
++
+ 	nvkm_debug(subdev, "setting performance state %d\n", pstatei);
+-	clk->pstate = pstatei;
++	if (subdev->device->chipset != 0xd7)
++		clk->pstate = pstatei;
+ 
+ 	nvkm_pcie_set_link(pci, pstate->pcie_speed, pstate->pcie_width);
+ 
+@@ -293,9 +382,14 @@
+ 				ret = ram->func->prog(ram);
+ 		} while (ret > 0);
+ 		ram->func->tidy(ram);
++		if (ret < 0 && subdev->device->chipset == 0xd7)
++			return ret;
+ 	}
+ 
+-	return nvkm_cstate_prog(clk, pstate, NVKM_CLK_CSTATE_HIGHEST);
++	ret = nvkm_cstate_prog(clk, pstate, NVKM_CLK_CSTATE_HIGHEST);
++	if (!ret && subdev->device->chipset == 0xd7)
++		clk->pstate = pstatei;
++	return ret;
+ }
+ 
+ static void
+@@ -307,6 +401,9 @@
+ 
+ 	if (!atomic_xchg(&clk->waiting, 0))
+ 		return;
++	if (nvkm_clk_fermi_core_only(clk) && READ_ONCE(clk->fermi_reclock_error))
++		goto done;
++
+ 	clk->pwrsrc = power_supply_is_system_supplied();
+ 
+ 	nvkm_trace(subdev, "P %d PWR %d U(AC) %d U(DC) %d A %d T %d°C D %d\n",
+@@ -326,24 +423,57 @@
+ 	if (pstate != clk->pstate) {
+ 		int ret = nvkm_pstate_prog(clk, pstate);
+ 		if (ret) {
++			if (nvkm_clk_fermi_core_only(clk))
++				WRITE_ONCE(clk->fermi_reclock_error, ret);
++
+ 			nvkm_error(subdev, "error setting pstate %d: %d\n",
+ 				   pstate, ret);
+ 		}
+ 	}
+ 
++done:
+ 	wake_up_all(&clk->wait);
+ }
+ 
+ static int
+ nvkm_pstate_calc(struct nvkm_clk *clk, bool wait)
+ {
++	if (nvkm_clk_fermi_core_only(clk) && READ_ONCE(clk->fermi_reclock_error))
++		return READ_ONCE(clk->fermi_reclock_error);
++
+ 	atomic_set(&clk->waiting, 1);
+ 	schedule_work(&clk->work);
+-	if (wait)
++	if (wait) {
++		if (nvkm_clk_fermi_core_only(clk)) {
++			/* waiting is consumed at worker entry, before any programming.
++			 * Flush the queued work so userspace gets the completed result. */
++			flush_work(&clk->work);
++			return READ_ONCE(clk->fermi_reclock_error);
++		}
+ 		wait_event(clk->wait, !atomic_read(&clk->waiting));
++	}
+ 	return 0;
+ }
+ 
++int
++nvkm_clk_dryrun(struct nvkm_clk *clk, int pstatei, struct nvkm_cstate *out)
++{
++	struct nvkm_pstate *pstate;
++	int idx = 0;
++
++	if (!clk->func->dryrun || !out)
++		return -ENOSYS;
++
++	list_for_each_entry(pstate, &clk->states, head) {
++		if (idx++ == pstatei) {
++			*out = pstate->base;
++			return clk->func->dryrun(clk, out);
++		}
++	}
++
++	return -EINVAL;
++}
++
+ static void
+ nvkm_pstate_info(struct nvkm_clk *clk, struct nvkm_pstate *pstate)
+ {
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c	2026-10-17 19:48:47.375820923 -0300
+@@ -25,10 +25,13 @@
+ #include "priv.h"
+ #include "pll.h"
+ 
++#include <core/option.h>
+ #include <subdev/bios.h>
+ #include <subdev/bios/pll.h>
+ #include <subdev/timer.h>
+ 
++#include <linux/math64.h>
++
+ struct gf100_clk_info {
+ 	u32 freq;
+ 	u32 ssel;
+@@ -91,6 +94,10 @@
+ 		return 0;
+ 	}
+ 
++	/* Failed MMIO/PLL readback must not divide by zero on the GF117
++	 * experimental path. Crystal PLLs above have already forced P = 1. */
++	if (device->chipset == 0xd7 && (!M || !P))
++		return 0;
+ 	return sclk * N / M / P;
+ }
+ 
+@@ -218,8 +225,10 @@
+ }
+ 
+ static u32
+-calc_src(struct gf100_clk *clk, int idx, u32 freq, u32 *dsrc, u32 *ddiv)
++calc_src(struct gf100_clk *clk, int idx, u32 freq, u32 *dsrc, u32 *ddiv,
++	 bool core_only)
+ {
++	struct nvkm_device *device = clk->base.subdev.device;
+ 	u32 sclk;
+ 
+ 	/* use one of the fixed frequencies if possible */
+@@ -240,7 +249,21 @@
+ 	}
+ 
+ 	/* otherwise, calculate the closest divider */
+-	sclk = read_vco(clk, 0x137160 + (idx * 4));
++	if (core_only) {
++		/* Calculate and program the same SPPLL input. read_vco() follows
++		 * bit 8 of the current source; discarding it here would change the
++		 * frequency of the temporary divider route when SPPLL1 is selected. */
++		*dsrc |= nvkm_rd32(device, 0x137160 + (idx * 4)) & 0x00000100;
++		sclk = nvkm_clk_read(&clk->base, (*dsrc & 0x00000100) ?
++				     nv_clk_src_sppll1 : nv_clk_src_sppll0);
++	} else {
++		sclk = read_vco(clk, 0x137160 + (idx * 4));
++	}
++	/* The first programming step temporarily uses the largest engine
++	 * divider while changing this source. Reject an input that would still
++	 * exceed the requested clock even with that divider active. */
++	if (core_only && (!sclk || div_u64((u64)sclk * 2, 65) > freq))
++		return 0;
+ 	if (idx < 7)
+ 		sclk = calc_div(clk, idx, sclk, freq, ddiv);
+ 	return sclk;
+@@ -271,11 +294,12 @@
+ }
+ 
+ static int
+-calc_clk(struct gf100_clk *clk, struct nvkm_cstate *cstate, int idx, int dom)
++calc_clk(struct gf100_clk *clk, struct nvkm_cstate *cstate, int idx, int dom,
++	 bool core_only)
+ {
+ 	struct gf100_clk_info *info = &clk->eng[idx];
+ 	u32 freq = cstate->domain[dom];
+-	u32 src0, div0, div1D, div1P = 0;
++	u32 src0, div0, div1D, div1P = 0, divclk;
+ 	u32 clk0, clk1 = 0;
+ 
+ 	/* invalid clock domain */
+@@ -283,8 +307,21 @@
+ 		return 0;
+ 
+ 	/* first possible path, using only dividers */
+-	clk0 = calc_src(clk, idx, freq, &src0, &div0);
+-	clk0 = calc_div(clk, idx, clk0, freq, &div1D);
++	divclk = calc_src(clk, idx, freq, &src0, &div0, core_only);
++	if (core_only && !divclk)
++		return -ERANGE;
++	clk0 = calc_div(clk, idx, divclk, freq, &div1D);
++	/* Keep the temporary divider path at or below the requested VBIOS
++	 * frequency.  A PLL transition must have a safe, already-programmed
++	 * fallback if lock or source switching fails. */
++	if (core_only && clk0 > freq) {
++		if (div1D >= 0x3f)
++			return -ERANGE;
++		div1D++;
++		clk0 = div_u64((u64)divclk * 2, div1D + 2);
++		if (clk0 > freq)
++			return -ERANGE;
++	}
+ 
+ 	/* see if we can get any closer using PLLs */
+ 	if (clk0 != freq && (0x00004387 & (1 << idx))) {
+@@ -310,7 +347,18 @@
+ 		info->ssel = info->coef = 0;
+ 		info->freq = clk0;
+ 	} else {
+-		if (div1P) {
++		if (core_only) {
++			/* Retain the divider-only route as a known fallback. */
++			info->dsrc = src0;
++			if (div0) {
++				info->ddiv |= 0x80000000;
++				info->ddiv |= div0 << 8;
++				info->ddiv |= div0;
++			}
++			if (div1D || div1P)
++				info->mdiv |= 0x80000000;
++			info->mdiv |= div1D | (div1P << 8);
++		} else if (div1P) {
+ 			info->mdiv |= 0x80000000;
+ 			info->mdiv |= div1P << 8;
+ 		}
+@@ -325,91 +373,217 @@
+ gf100_clk_calc(struct nvkm_clk *base, struct nvkm_cstate *cstate)
+ {
+ 	struct gf100_clk *clk = gf100_clk(base);
++	struct nvkm_device *device = base->subdev.device;
++	bool core_only = device->chipset == 0xd7 &&
++		nvkm_boolopt(device->cfgopt, "NvReclockFermiCoreOnly", false);
+ 	int ret;
+ 
+-	if ((ret = calc_clk(clk, cstate, 0x00, nv_clk_src_gpc)) ||
+-	    (ret = calc_clk(clk, cstate, 0x01, nv_clk_src_rop)) ||
+-	    (ret = calc_clk(clk, cstate, 0x02, nv_clk_src_hubk07)) ||
+-	    (ret = calc_clk(clk, cstate, 0x07, nv_clk_src_hubk06)) ||
+-	    (ret = calc_clk(clk, cstate, 0x08, nv_clk_src_hubk01)) ||
+-	    (ret = calc_clk(clk, cstate, 0x09, nv_clk_src_copy)) ||
+-	    (ret = calc_clk(clk, cstate, 0x0c, nv_clk_src_pmu)) ||
+-	    (ret = calc_clk(clk, cstate, 0x0e, nv_clk_src_vdec)))
++	/* Rebuild the plan from a known state.  The core-only experiment must
++	 * never retain a stale plan for an engine omitted from this transaction. */
++	memset(clk->eng, 0, sizeof(clk->eng));
++	if (core_only)
++		return calc_clk(clk, cstate, 0x00, nv_clk_src_gpc, true);
++
++	if ((ret = calc_clk(clk, cstate, 0x00, nv_clk_src_gpc, false)) ||
++	    (ret = calc_clk(clk, cstate, 0x01, nv_clk_src_rop, false)) ||
++	    (ret = calc_clk(clk, cstate, 0x02, nv_clk_src_hubk07, false)) ||
++	    (ret = calc_clk(clk, cstate, 0x07, nv_clk_src_hubk06, false)) ||
++	    (ret = calc_clk(clk, cstate, 0x08, nv_clk_src_hubk01, false)) ||
++	    (ret = calc_clk(clk, cstate, 0x09, nv_clk_src_copy, false)) ||
++	    (ret = calc_clk(clk, cstate, 0x0c, nv_clk_src_pmu, false)) ||
++	    (ret = calc_clk(clk, cstate, 0x0e, nv_clk_src_vdec, false)))
+ 		return ret;
+ 
+ 	return 0;
+ }
+ 
+-static void
++static int
++gf100_clk_dryrun(struct nvkm_clk *base, struct nvkm_cstate *cstate)
++{
++	/* gf100_clk contains embedded eng[] storage.  The shallow copy shares
++	 * only immutable function/device/VBIOS pointers; gf100_clk_calc() writes
++	 * eng[] in the copy and its helpers perform reads only. */
++	struct gf100_clk shadow = *gf100_clk(base);
++	int ret;
++
++	/* gf100_clk_calc() fills shadow.eng and only reads VBIOS/MMIO state. */
++	ret = gf100_clk_calc(&shadow.base, cstate);
++	if (!ret)
++		cstate->domain[nv_clk_src_gpc] = shadow.eng[0].freq;
++	return ret;
++}
++
++static int
++gf100_clk_verify(struct gf100_clk *clk, u32 addr, u32 mask, u32 expected)
++{
++	u32 actual = nvkm_rd32(clk->base.subdev.device, addr);
++
++	if ((actual & mask) == (expected & mask))
++		return 0;
++	nvkm_error(&clk->base.subdev,
++		   "clock readback mismatch at %06x: %08x mask %08x expected %08x\n",
++		   addr, actual, mask, expected);
++	return -EIO;
++}
++
++static int
+ gf100_clk_prog_0(struct gf100_clk *clk, int idx)
+ {
+ 	struct gf100_clk_info *info = &clk->eng[idx];
+ 	struct nvkm_device *device = clk->base.subdev.device;
+-	if (idx < 7 && !info->ssel) {
++	bool core_only = device->chipset == 0xd7 && idx == 0 &&
++		nvkm_boolopt(device->cfgopt, "NvReclockFermiCoreOnly", false);
++	int ret;
++	/* Protect an already-active divider route before changing its input.
++	 * Enabling division cannot speed up the PLL route: its divider bits
++	 * remain unchanged, and every encoded divisor is at least two. */
++	if (core_only) {
++		nvkm_mask(device, 0x137250, 0x8000003f, 0x8000003f);
++		ret = gf100_clk_verify(clk, 0x137250, 0x8000003f, 0x8000003f);
++		if (ret)
++			return ret;
++	}
++	if (idx < 7 && (!info->ssel || core_only)) {
++		if (core_only)
++			nvkm_wr32(device, 0x137160 + (idx * 0x04), info->dsrc);
+ 		nvkm_mask(device, 0x1371d0 + (idx * 0x04), 0x80003f3f, info->ddiv);
+-		nvkm_wr32(device, 0x137160 + (idx * 0x04), info->dsrc);
++		if (!core_only)
++			nvkm_wr32(device, 0x137160 + (idx * 0x04), info->dsrc);
++	}
++	if (core_only) {
++		ret = gf100_clk_verify(clk, 0x137160, 0x00030103, info->dsrc);
++		if (ret)
++			return ret;
++		ret = gf100_clk_verify(clk, 0x1371d0, 0x80003f3f, info->ddiv);
++		if (ret)
++			return ret;
++	}
++	/* Prepare the bounded divider before selecting it, avoiding a transient
++	 * use of the previous state's engine divider during the source switch. */
++	if (core_only) {
++		nvkm_mask(device, 0x137250, 0x8000003f,
++			  0x80000000 | (info->mdiv & 0x0000003f));
++		return gf100_clk_verify(clk, 0x137250, 0x8000003f,
++					0x80000000 | (info->mdiv & 0x0000003f));
+ 	}
++	return 0;
+ }
+ 
+-static void
++static int
+ gf100_clk_prog_1(struct gf100_clk *clk, int idx)
+ {
++	struct gf100_clk_info *info = &clk->eng[idx];
+ 	struct nvkm_device *device = clk->base.subdev.device;
++	bool core_only = device->chipset == 0xd7 && idx == 0 &&
++		nvkm_boolopt(device->cfgopt, "NvReclockFermiCoreOnly", false);
++	int ret;
+ 	nvkm_mask(device, 0x137100, (1 << idx), 0x00000000);
+-	nvkm_msec(device, 2000,
++	ret = nvkm_msec(device, 2000,
+ 		if (!(nvkm_rd32(device, 0x137100) & (1 << idx)))
+ 			break;
+ 	);
++	if (ret < 0 && device->chipset == 0xd7) {
++		/* If hardware confirms the divider route despite the timeout, finish
++		 * programming its bounded fallback before reporting the failure. */
++		if (core_only && !(nvkm_rd32(device, 0x137100) & (1 << idx)))
++			nvkm_mask(device, 0x137250 + (idx * 0x04), 0x8000003f,
++				  info->mdiv & 0x8000003f);
++		return -ETIMEDOUT;
++	}
++	/* The divider route is now active. Program its final divider before
++	 * touching the PLL, so a PLL error leaves a bounded fallback clock. */
++	if (core_only)
++		nvkm_mask(device, 0x137250 + (idx * 0x04), 0x8000003f,
++			  info->mdiv & 0x8000003f);
++	return 0;
+ }
+ 
+-static void
++static int
+ gf100_clk_prog_2(struct gf100_clk *clk, int idx)
+ {
+ 	struct gf100_clk_info *info = &clk->eng[idx];
+ 	struct nvkm_device *device = clk->base.subdev.device;
+ 	const u32 addr = 0x137000 + (idx * 0x20);
++	bool core_only = device->chipset == 0xd7 && idx == 0 &&
++		nvkm_boolopt(device->cfgopt, "NvReclockFermiCoreOnly", false);
++	int ret;
+ 	if (idx <= 7) {
+ 		nvkm_mask(device, addr + 0x00, 0x00000004, 0x00000000);
+ 		nvkm_mask(device, addr + 0x00, 0x00000001, 0x00000000);
+ 		if (info->coef) {
++			if (core_only) {
++				/* Never rewrite coefficients while enable/sync still
++				 * report active after the disable requests. */
++				ret = gf100_clk_verify(clk, addr, 0x00000005, 0);
++				if (ret)
++					return ret;
++			}
+ 			nvkm_wr32(device, addr + 0x04, info->coef);
++			if (core_only) {
++				ret = gf100_clk_verify(clk, addr + 0x04,
++						0x003fffff, info->coef);
++				if (ret)
++					return ret;
++			}
+ 			nvkm_mask(device, addr + 0x00, 0x00000001, 0x00000001);
++			if (core_only) {
++				ret = gf100_clk_verify(clk, addr, 0x00000001, 1);
++				if (ret)
++					return ret;
++			}
+ 
+ 			/* Test PLL lock */
+ 			nvkm_mask(device, addr + 0x00, 0x00000010, 0x00000000);
+-			nvkm_msec(device, 2000,
++			if (nvkm_msec(device, 2000,
+ 				if (nvkm_rd32(device, addr + 0x00) & 0x00020000)
+ 					break;
+-			);
++			) < 0 && device->chipset == 0xd7)
++				return -ETIMEDOUT;
++			if (core_only) {
++				nvkm_mask(device, 0x137250 + (idx * 0x04),
++					 0x00003f00, info->mdiv & 0x00003f00);
++				ret = gf100_clk_verify(clk, 0x137250,
++						0x00003f00, info->mdiv);
++				if (ret)
++					return ret;
++			}
+ 			nvkm_mask(device, addr + 0x00, 0x00000010, 0x00000010);
+ 
+ 			/* Enable sync mode */
+ 			nvkm_mask(device, addr + 0x00, 0x00000004, 0x00000004);
+ 		}
+ 	}
++	return 0;
+ }
+ 
+-static void
++static int
+ gf100_clk_prog_3(struct gf100_clk *clk, int idx)
+ {
+ 	struct gf100_clk_info *info = &clk->eng[idx];
+ 	struct nvkm_device *device = clk->base.subdev.device;
+ 	if (info->ssel) {
+ 		nvkm_mask(device, 0x137100, (1 << idx), info->ssel);
+-		nvkm_msec(device, 2000,
++		if (nvkm_msec(device, 2000,
+ 			u32 tmp = nvkm_rd32(device, 0x137100) & (1 << idx);
+ 			if (tmp == info->ssel)
+ 				break;
+-		);
++		) < 0 && device->chipset == 0xd7)
++			return -ETIMEDOUT;
+ 	}
++	return 0;
+ }
+ 
+-static void
++static int
+ gf100_clk_prog_4(struct gf100_clk *clk, int idx)
+ {
+ 	struct gf100_clk_info *info = &clk->eng[idx];
+ 	struct nvkm_device *device = clk->base.subdev.device;
+ 	nvkm_mask(device, 0x137250 + (idx * 0x04), 0x00003f3f, info->mdiv);
++	if (device->chipset == 0xd7 && idx == 0 &&
++	    nvkm_boolopt(device->cfgopt, "NvReclockFermiCoreOnly", false))
++		return gf100_clk_verify(clk, 0x137250,
++					0x00003f3f | (info->mdiv & 0x80000000), info->mdiv);
++	return 0;
+ }
+ 
+ static int
+@@ -417,7 +591,7 @@
+ {
+ 	struct gf100_clk *clk = gf100_clk(base);
+ 	struct {
+-		void (*exec)(struct gf100_clk *, int);
++		int (*exec)(struct gf100_clk *, int);
+ 	} stage[] = {
+ 		{ gf100_clk_prog_0 }, /* div programming */
+ 		{ gf100_clk_prog_1 }, /* select div mode */
+@@ -425,13 +599,15 @@
+ 		{ gf100_clk_prog_3 }, /* (maybe) select pll mode */
+ 		{ gf100_clk_prog_4 }, /* final divider */
+ 	};
+-	int i, j;
++	int i, j, ret;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(stage); i++) {
+ 		for (j = 0; j < ARRAY_SIZE(clk->eng); j++) {
+ 			if (!clk->eng[j].freq)
+ 				continue;
+-			stage[i].exec(clk, j);
++			ret = stage[i].exec(clk, j);
++			if (ret)
++				return ret;
+ 		}
+ 	}
+ 
+@@ -449,6 +625,7 @@
+ gf100_clk = {
+ 	.read = gf100_clk_read,
+ 	.calc = gf100_clk_calc,
++	.dryrun = gf100_clk_dryrun,
+ 	.prog = gf100_clk_prog,
+ 	.tidy = gf100_clk_tidy,
+ 	.domains = {
+@@ -472,10 +649,14 @@
+ 	      struct nvkm_clk **pclk)
+ {
+ 	struct gf100_clk *clk;
++	bool allow_reclock = device->chipset == 0xd7 &&
++		(nvkm_boolopt(device->cfgopt, "NvReclockFermi", false) ||
++		 nvkm_boolopt(device->cfgopt, "NvReclockFermiCoreOnly", false));
+ 
+ 	if (!(clk = kzalloc_obj(*clk)))
+ 		return -ENOMEM;
+ 	*pclk = &clk->base;
+ 
+-	return nvkm_clk_ctor(&gf100_clk, device, type, inst, false, &clk->base);
++	return nvkm_clk_ctor(&gf100_clk, device, type, inst, allow_reclock,
++			     &clk->base);
+ }
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c.orig b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c.orig
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c.orig	1969-12-31 21:00:00.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c.orig	2026-10-17 05:17:21.375519379 -0300
+@@ -0,0 +1,498 @@
++/*
++ * Copyright 2012 Red Hat Inc.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE COPYRIGHT HOLDER(S) OR AUTHOR(S) BE LIABLE FOR ANY CLAIM, DAMAGES OR
++ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
++ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
++ * OTHER DEALINGS IN THE SOFTWARE.
++ *
++ * Authors: Ben Skeggs
++ */
++#define gf100_clk(p) container_of((p), struct gf100_clk, base)
++#include "priv.h"
++#include "pll.h"
++
++#include <subdev/bios.h>
++#include <subdev/bios/pll.h>
++#include <subdev/timer.h>
++
++struct gf100_clk_info {
++	u32 freq;
++	u32 ssel;
++	u32 mdiv;
++	u32 dsrc;
++	u32 ddiv;
++	u32 coef;
++};
++
++struct gf100_clk {
++	struct nvkm_clk base;
++	struct gf100_clk_info eng[16];
++};
++
++static u32 read_div(struct gf100_clk *, int, u32, u32);
++
++static u32
++read_vco(struct gf100_clk *clk, u32 dsrc)
++{
++	struct nvkm_device *device = clk->base.subdev.device;
++	u32 ssrc = nvkm_rd32(device, dsrc);
++	if (!(ssrc & 0x00000100))
++		return nvkm_clk_read(&clk->base, nv_clk_src_sppll0);
++	return nvkm_clk_read(&clk->base, nv_clk_src_sppll1);
++}
++
++static u32
++read_pll(struct gf100_clk *clk, u32 pll)
++{
++	struct nvkm_device *device = clk->base.subdev.device;
++	u32 ctrl = nvkm_rd32(device, pll + 0x00);
++	u32 coef = nvkm_rd32(device, pll + 0x04);
++	u32 P = (coef & 0x003f0000) >> 16;
++	u32 N = (coef & 0x0000ff00) >> 8;
++	u32 M = (coef & 0x000000ff) >> 0;
++	u32 sclk;
++
++	if (!(ctrl & 0x00000001))
++		return 0;
++
++	switch (pll) {
++	case 0x00e800:
++	case 0x00e820:
++		sclk = device->crystal;
++		P = 1;
++		break;
++	case 0x132000:
++		sclk = nvkm_clk_read(&clk->base, nv_clk_src_mpllsrc);
++		break;
++	case 0x132020:
++		sclk = nvkm_clk_read(&clk->base, nv_clk_src_mpllsrcref);
++		break;
++	case 0x137000:
++	case 0x137020:
++	case 0x137040:
++	case 0x1370e0:
++		sclk = read_div(clk, (pll & 0xff) / 0x20, 0x137120, 0x137140);
++		break;
++	default:
++		return 0;
++	}
++
++	return sclk * N / M / P;
++}
++
++static u32
++read_div(struct gf100_clk *clk, int doff, u32 dsrc, u32 dctl)
++{
++	struct nvkm_device *device = clk->base.subdev.device;
++	u32 ssrc = nvkm_rd32(device, dsrc + (doff * 4));
++	u32 sclk, sctl, sdiv = 2;
++
++	switch (ssrc & 0x00000003) {
++	case 0:
++		if ((ssrc & 0x00030000) != 0x00030000)
++			return device->crystal;
++		return 108000;
++	case 2:
++		return 100000;
++	case 3:
++		sclk = read_vco(clk, dsrc + (doff * 4));
++
++		/* Memclk has doff of 0 despite its alt. location */
++		if (doff <= 2) {
++			sctl = nvkm_rd32(device, dctl + (doff * 4));
++
++			if (sctl & 0x80000000) {
++				if (ssrc & 0x100)
++					sctl >>= 8;
++
++				sdiv = (sctl & 0x3f) + 2;
++			}
++		}
++
++		return (sclk * 2) / sdiv;
++	default:
++		return 0;
++	}
++}
++
++static u32
++read_clk(struct gf100_clk *clk, int idx)
++{
++	struct nvkm_device *device = clk->base.subdev.device;
++	u32 sctl = nvkm_rd32(device, 0x137250 + (idx * 4));
++	u32 ssel = nvkm_rd32(device, 0x137100);
++	u32 sclk, sdiv;
++
++	if (ssel & (1 << idx)) {
++		if (idx < 7)
++			sclk = read_pll(clk, 0x137000 + (idx * 0x20));
++		else
++			sclk = read_pll(clk, 0x1370e0);
++		sdiv = ((sctl & 0x00003f00) >> 8) + 2;
++	} else {
++		sclk = read_div(clk, idx, 0x137160, 0x1371d0);
++		sdiv = ((sctl & 0x0000003f) >> 0) + 2;
++	}
++
++	if (sctl & 0x80000000)
++		return (sclk * 2) / sdiv;
++
++	return sclk;
++}
++
++static int
++gf100_clk_read(struct nvkm_clk *base, enum nv_clk_src src)
++{
++	struct gf100_clk *clk = gf100_clk(base);
++	struct nvkm_subdev *subdev = &clk->base.subdev;
++	struct nvkm_device *device = subdev->device;
++
++	switch (src) {
++	case nv_clk_src_crystal:
++		return device->crystal;
++	case nv_clk_src_href:
++		return 100000;
++	case nv_clk_src_sppll0:
++		return read_pll(clk, 0x00e800);
++	case nv_clk_src_sppll1:
++		return read_pll(clk, 0x00e820);
++
++	case nv_clk_src_mpllsrcref:
++		return read_div(clk, 0, 0x137320, 0x137330);
++	case nv_clk_src_mpllsrc:
++		return read_pll(clk, 0x132020);
++	case nv_clk_src_mpll:
++		return read_pll(clk, 0x132000);
++	case nv_clk_src_mdiv:
++		return read_div(clk, 0, 0x137300, 0x137310);
++	case nv_clk_src_mem:
++		if (nvkm_rd32(device, 0x1373f0) & 0x00000002)
++			return nvkm_clk_read(&clk->base, nv_clk_src_mpll);
++		return nvkm_clk_read(&clk->base, nv_clk_src_mdiv);
++
++	case nv_clk_src_gpc:
++		return read_clk(clk, 0x00);
++	case nv_clk_src_rop:
++		return read_clk(clk, 0x01);
++	case nv_clk_src_hubk07:
++		return read_clk(clk, 0x02);
++	case nv_clk_src_hubk06:
++		return read_clk(clk, 0x07);
++	case nv_clk_src_hubk01:
++		return read_clk(clk, 0x08);
++	case nv_clk_src_copy:
++		return read_clk(clk, 0x09);
++	case nv_clk_src_pmu:
++		return read_clk(clk, 0x0c);
++	case nv_clk_src_vdec:
++		return read_clk(clk, 0x0e);
++	default:
++		nvkm_error(subdev, "invalid clock source %d\n", src);
++		return -EINVAL;
++	}
++}
++
++static u32
++calc_div(struct gf100_clk *clk, int idx, u32 ref, u32 freq, u32 *ddiv)
++{
++	u32 div = min((ref * 2) / freq, (u32)65);
++	if (div < 2)
++		div = 2;
++
++	*ddiv = div - 2;
++	return (ref * 2) / div;
++}
++
++static u32
++calc_src(struct gf100_clk *clk, int idx, u32 freq, u32 *dsrc, u32 *ddiv)
++{
++	u32 sclk;
++
++	/* use one of the fixed frequencies if possible */
++	*ddiv = 0x00000000;
++	switch (freq) {
++	case  27000:
++	case 108000:
++		*dsrc = 0x00000000;
++		if (freq == 108000)
++			*dsrc |= 0x00030000;
++		return freq;
++	case 100000:
++		*dsrc = 0x00000002;
++		return freq;
++	default:
++		*dsrc = 0x00000003;
++		break;
++	}
++
++	/* otherwise, calculate the closest divider */
++	sclk = read_vco(clk, 0x137160 + (idx * 4));
++	if (idx < 7)
++		sclk = calc_div(clk, idx, sclk, freq, ddiv);
++	return sclk;
++}
++
++static u32
++calc_pll(struct gf100_clk *clk, int idx, u32 freq, u32 *coef)
++{
++	struct nvkm_subdev *subdev = &clk->base.subdev;
++	struct nvkm_bios *bios = subdev->device->bios;
++	struct nvbios_pll limits;
++	int N, M, P, ret;
++
++	ret = nvbios_pll_parse(bios, 0x137000 + (idx * 0x20), &limits);
++	if (ret)
++		return 0;
++
++	limits.refclk = read_div(clk, idx, 0x137120, 0x137140);
++	if (!limits.refclk)
++		return 0;
++
++	ret = gt215_pll_calc(subdev, &limits, freq, &N, NULL, &M, &P);
++	if (ret <= 0)
++		return 0;
++
++	*coef = (P << 16) | (N << 8) | M;
++	return ret;
++}
++
++static int
++calc_clk(struct gf100_clk *clk, struct nvkm_cstate *cstate, int idx, int dom)
++{
++	struct gf100_clk_info *info = &clk->eng[idx];
++	u32 freq = cstate->domain[dom];
++	u32 src0, div0, div1D, div1P = 0;
++	u32 clk0, clk1 = 0;
++
++	/* invalid clock domain */
++	if (!freq)
++		return 0;
++
++	/* first possible path, using only dividers */
++	clk0 = calc_src(clk, idx, freq, &src0, &div0);
++	clk0 = calc_div(clk, idx, clk0, freq, &div1D);
++
++	/* see if we can get any closer using PLLs */
++	if (clk0 != freq && (0x00004387 & (1 << idx))) {
++		if (idx <= 7)
++			clk1 = calc_pll(clk, idx, freq, &info->coef);
++		else
++			clk1 = cstate->domain[nv_clk_src_hubk06];
++		clk1 = calc_div(clk, idx, clk1, freq, &div1P);
++	}
++
++	/* select the method which gets closest to target freq */
++	if (abs((int)freq - clk0) <= abs((int)freq - clk1)) {
++		info->dsrc = src0;
++		if (div0) {
++			info->ddiv |= 0x80000000;
++			info->ddiv |= div0 << 8;
++			info->ddiv |= div0;
++		}
++		if (div1D) {
++			info->mdiv |= 0x80000000;
++			info->mdiv |= div1D;
++		}
++		info->ssel = info->coef = 0;
++		info->freq = clk0;
++	} else {
++		if (div1P) {
++			info->mdiv |= 0x80000000;
++			info->mdiv |= div1P << 8;
++		}
++		info->ssel = (1 << idx);
++		info->freq = clk1;
++	}
++
++	return 0;
++}
++
++static int
++gf100_clk_calc(struct nvkm_clk *base, struct nvkm_cstate *cstate)
++{
++	struct gf100_clk *clk = gf100_clk(base);
++	int ret;
++
++	if ((ret = calc_clk(clk, cstate, 0x00, nv_clk_src_gpc)) ||
++	    (ret = calc_clk(clk, cstate, 0x01, nv_clk_src_rop)) ||
++	    (ret = calc_clk(clk, cstate, 0x02, nv_clk_src_hubk07)) ||
++	    (ret = calc_clk(clk, cstate, 0x07, nv_clk_src_hubk06)) ||
++	    (ret = calc_clk(clk, cstate, 0x08, nv_clk_src_hubk01)) ||
++	    (ret = calc_clk(clk, cstate, 0x09, nv_clk_src_copy)) ||
++	    (ret = calc_clk(clk, cstate, 0x0c, nv_clk_src_pmu)) ||
++	    (ret = calc_clk(clk, cstate, 0x0e, nv_clk_src_vdec)))
++		return ret;
++
++	return 0;
++}
++
++static int
++gf100_clk_dryrun(struct nvkm_clk *base, struct nvkm_cstate *cstate)
++{
++	/* gf100_clk contains embedded eng[] storage.  The shallow copy shares
++	 * only immutable function/device/VBIOS pointers; gf100_clk_calc() writes
++	 * eng[] in the copy and its helpers perform reads only. */
++	struct gf100_clk shadow = *gf100_clk(base);
++	int ret;
++
++	/* gf100_clk_calc() fills shadow.eng and only reads VBIOS/MMIO state. */
++	ret = gf100_clk_calc(&shadow.base, cstate);
++	if (!ret)
++		cstate->domain[nv_clk_src_gpc] = shadow.eng[0].freq;
++	return ret;
++}
++
++static void
++gf100_clk_prog_0(struct gf100_clk *clk, int idx)
++{
++	struct gf100_clk_info *info = &clk->eng[idx];
++	struct nvkm_device *device = clk->base.subdev.device;
++	if (idx < 7 && !info->ssel) {
++		nvkm_mask(device, 0x1371d0 + (idx * 0x04), 0x80003f3f, info->ddiv);
++		nvkm_wr32(device, 0x137160 + (idx * 0x04), info->dsrc);
++	}
++}
++
++static void
++gf100_clk_prog_1(struct gf100_clk *clk, int idx)
++{
++	struct nvkm_device *device = clk->base.subdev.device;
++	nvkm_mask(device, 0x137100, (1 << idx), 0x00000000);
++	nvkm_msec(device, 2000,
++		if (!(nvkm_rd32(device, 0x137100) & (1 << idx)))
++			break;
++	);
++}
++
++static void
++gf100_clk_prog_2(struct gf100_clk *clk, int idx)
++{
++	struct gf100_clk_info *info = &clk->eng[idx];
++	struct nvkm_device *device = clk->base.subdev.device;
++	const u32 addr = 0x137000 + (idx * 0x20);
++	if (idx <= 7) {
++		nvkm_mask(device, addr + 0x00, 0x00000004, 0x00000000);
++		nvkm_mask(device, addr + 0x00, 0x00000001, 0x00000000);
++		if (info->coef) {
++			nvkm_wr32(device, addr + 0x04, info->coef);
++			nvkm_mask(device, addr + 0x00, 0x00000001, 0x00000001);
++
++			/* Test PLL lock */
++			nvkm_mask(device, addr + 0x00, 0x00000010, 0x00000000);
++			nvkm_msec(device, 2000,
++				if (nvkm_rd32(device, addr + 0x00) & 0x00020000)
++					break;
++			);
++			nvkm_mask(device, addr + 0x00, 0x00000010, 0x00000010);
++
++			/* Enable sync mode */
++			nvkm_mask(device, addr + 0x00, 0x00000004, 0x00000004);
++		}
++	}
++}
++
++static void
++gf100_clk_prog_3(struct gf100_clk *clk, int idx)
++{
++	struct gf100_clk_info *info = &clk->eng[idx];
++	struct nvkm_device *device = clk->base.subdev.device;
++	if (info->ssel) {
++		nvkm_mask(device, 0x137100, (1 << idx), info->ssel);
++		nvkm_msec(device, 2000,
++			u32 tmp = nvkm_rd32(device, 0x137100) & (1 << idx);
++			if (tmp == info->ssel)
++				break;
++		);
++	}
++}
++
++static void
++gf100_clk_prog_4(struct gf100_clk *clk, int idx)
++{
++	struct gf100_clk_info *info = &clk->eng[idx];
++	struct nvkm_device *device = clk->base.subdev.device;
++	nvkm_mask(device, 0x137250 + (idx * 0x04), 0x00003f3f, info->mdiv);
++}
++
++static int
++gf100_clk_prog(struct nvkm_clk *base)
++{
++	struct gf100_clk *clk = gf100_clk(base);
++	struct {
++		void (*exec)(struct gf100_clk *, int);
++	} stage[] = {
++		{ gf100_clk_prog_0 }, /* div programming */
++		{ gf100_clk_prog_1 }, /* select div mode */
++		{ gf100_clk_prog_2 }, /* (maybe) program pll */
++		{ gf100_clk_prog_3 }, /* (maybe) select pll mode */
++		{ gf100_clk_prog_4 }, /* final divider */
++	};
++	int i, j;
++
++	for (i = 0; i < ARRAY_SIZE(stage); i++) {
++		for (j = 0; j < ARRAY_SIZE(clk->eng); j++) {
++			if (!clk->eng[j].freq)
++				continue;
++			stage[i].exec(clk, j);
++		}
++	}
++
++	return 0;
++}
++
++static void
++gf100_clk_tidy(struct nvkm_clk *base)
++{
++	struct gf100_clk *clk = gf100_clk(base);
++	memset(clk->eng, 0x00, sizeof(clk->eng));
++}
++
++static const struct nvkm_clk_func
++gf100_clk = {
++	.read = gf100_clk_read,
++	.calc = gf100_clk_calc,
++	.dryrun = gf100_clk_dryrun,
++	.prog = gf100_clk_prog,
++	.tidy = gf100_clk_tidy,
++	.domains = {
++		{ nv_clk_src_crystal, 0xff },
++		{ nv_clk_src_href   , 0xff },
++		{ nv_clk_src_hubk06 , 0x00 },
++		{ nv_clk_src_hubk01 , 0x01 },
++		{ nv_clk_src_copy   , 0x02 },
++		{ nv_clk_src_gpc    , 0x03, NVKM_CLK_DOM_FLAG_VPSTATE, "core", 2000 },
++		{ nv_clk_src_rop    , 0x04 },
++		{ nv_clk_src_mem    , 0x05, 0, "memory", 1000 },
++		{ nv_clk_src_vdec   , 0x06 },
++		{ nv_clk_src_pmu    , 0x0a },
++		{ nv_clk_src_hubk07 , 0x0b },
++		{ nv_clk_src_max }
++	}
++};
++
++int
++gf100_clk_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
++	      struct nvkm_clk **pclk)
++{
++	struct gf100_clk *clk;
++
++	if (!(clk = kzalloc_obj(*clk)))
++		return -ENOMEM;
++	*pclk = &clk->base;
++
++	return nvkm_clk_ctor(&gf100_clk, device, type, inst, false, &clk->base);
++}
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/pllgt215.c b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/pllgt215.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/pllgt215.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/pllgt215.c	2026-10-17 05:17:21.408148667 -0300
+@@ -30,33 +30,68 @@
+ gt215_pll_calc(struct nvkm_subdev *subdev, struct nvbios_pll *info,
+ 	       u32 freq, int *pN, int *pfN, int *pM, int *P)
+ {
+-	u32 best_err = ~0, err;
++	u64 best_err = ~0ULL, err, numerator, quotient, remainder;
++	u64 actual, scaled;
+ 	int M, lM, hM, N, fN;
++	s64 fractional;
++
++	if (!info || !pN || !pM || !P || !freq || !info->refclk ||
++	    !info->vco1.max_freq || !info->vco1.min_inputfreq ||
++	    !info->vco1.max_inputfreq || info->vco1.min_m > info->vco1.max_m ||
++	    !info->vco1.min_m || !info->vco1.min_n ||
++	    info->vco1.min_n > info->vco1.max_n || !info->min_p ||
++	    !info->max_p || info->min_p > info->max_p ||
++	    info->vco1.min_inputfreq > info->vco1.max_inputfreq)
++		return -EINVAL;
++
++	if (freq > INT_MAX)
++		return -ERANGE;
+ 
+ 	*P = info->vco1.max_freq / freq;
+ 	if (*P > info->max_p)
+ 		*P = info->max_p;
+ 	if (*P < info->min_p)
+ 		*P = info->min_p;
++	if (!*P)
++		return -ERANGE;
+ 
+-	lM = (info->refclk + info->vco1.max_inputfreq) / info->vco1.max_inputfreq;
+-	lM = max(lM, (int)info->vco1.min_m);
+-	hM = (info->refclk + info->vco1.min_inputfreq) / info->vco1.min_inputfreq;
+-	hM = min(hM, (int)info->vco1.max_m);
+-	lM = min(lM, hM);
++	/* Keep refclk / M within the inclusive VBIOS input-frequency limits. */
++	quotient = ((u64)info->refclk + info->vco1.max_inputfreq - 1) /
++		   info->vco1.max_inputfreq;
++	if (quotient > INT_MAX)
++		return -ERANGE;
++	lM = max((int)quotient, (int)info->vco1.min_m);
++	quotient = info->refclk / info->vco1.min_inputfreq;
++	if (quotient > INT_MAX)
++		return -ERANGE;
++	hM = min((int)quotient, (int)info->vco1.max_m);
++	/* Never relax the VBIOS minimum M to repair an empty interval. */
++	if (lM > hM)
++		return -ERANGE;
+ 
+ 	for (M = lM; M <= hM; M++) {
+-		u32 tmp = freq * *P * M;
+-		N  = tmp / info->refclk;
+-		fN = tmp % info->refclk;
++		numerator = (u64)freq * *P * M;
++		quotient = div_u64(numerator, info->refclk);
++		remainder = numerator % info->refclk;
++		if (quotient > INT_MAX)
++			return -ERANGE;
++		N = quotient;
+ 
+ 		if (!pfN) {
+-			if (fN >= info->refclk / 2)
++			if (remainder >= info->refclk / 2) {
++				if (N == INT_MAX)
++					return -ERANGE;
+ 				N++;
++			}
+ 		} else {
+-			if (fN <  info->refclk / 2)
++			if (remainder < info->refclk / 2)
+ 				N--;
+-			fN = tmp - (N * info->refclk);
++			/* Preserve the original numerator.  do_div() is deliberately
++			 * avoided here because it overwrites its u64 argument. */
++			fractional = (s64)numerator - ((s64)N * info->refclk);
++			if (fractional < INT_MIN || fractional > INT_MAX)
++				return -ERANGE;
++			fN = fractional;
+ 		}
+ 
+ 		if (N < info->vco1.min_n)
+@@ -64,7 +99,8 @@
+ 		if (N > info->vco1.max_n)
+ 			break;
+ 
+-		err = abs(freq - (info->refclk * N / M / *P));
++		actual = (u64)info->refclk * N / M / *P;
++		err = actual > freq ? actual - freq : freq - actual;
+ 		if (err < best_err) {
+ 			best_err = err;
+ 			*pN = N;
+@@ -72,7 +108,8 @@
+ 		}
+ 
+ 		if (pfN) {
+-			*pfN = ((fN << 13) + info->refclk / 2) / info->refclk;
++			scaled = ((s64)fN << 13) + info->refclk / 2;
++			*pfN = div_u64(scaled, info->refclk);
+ 			*pfN = (*pfN - 4096) & 0xffff;
+ 			return freq;
+ 		}
+@@ -83,5 +120,10 @@
+ 		return -EINVAL;
+ 	}
+ 
+-	return info->refclk * *pN / *pM / *P;
++	if (!*pM || !*P)
++		return -ERANGE;
++	actual = (u64)info->refclk * *pN / *pM / *P;
++	if (actual > INT_MAX)
++		return -ERANGE;
++	return actual;
+ }
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/priv.h b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/priv.h
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/priv.h	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/priv.h	2026-10-17 05:17:21.374392916 -0300
+@@ -9,6 +9,8 @@
+ 	void (*fini)(struct nvkm_clk *);
+ 	int (*read)(struct nvkm_clk *, enum nv_clk_src);
+ 	int (*calc)(struct nvkm_clk *, struct nvkm_cstate *);
++	/* Calculate a cstate without programming clocks or memory. */
++	int (*dryrun)(struct nvkm_clk *, struct nvkm_cstate *);
+ 	int (*prog)(struct nvkm_clk *);
+ 	void (*tidy)(struct nvkm_clk *);
+ 	struct nvkm_pstate *pstates;
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/devinit/gf100.c b/drivers/gpu/drm/nouveau/nvkm/subdev/devinit/gf100.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/devinit/gf100.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/devinit/gf100.c	2026-10-17 05:17:21.414903220 -0300
+@@ -101,8 +101,23 @@
+ 	base->post = ((nvkm_rd32(device, 0x2240c) & BIT(1)) == 0);
+ }
+ 
++/* The VBIOS interpreter can also reach the legacy CRTC index/data pair
++ * through direct MMIO opcodes, bypassing the VGA port helpers. */
++static u32
++gf100_devinit_mmio(struct nvkm_devinit *init, u32 addr)
++{
++	if (init->subdev.device->chipset == 0xd7 &&
++	    (addr & ~3U) == 0x6013d4) {
++		nvkm_warn(&init->subdev,
++			  "GF117 blocked VBIOS CRTC MMIO access: addr=%06x\n", addr);
++		return ~0U; /* interpreter sentinel: skip access, not register zero */
++	}
++	return addr;
++}
++
+ static const struct nvkm_devinit_func
+ gf100_devinit = {
++	.mmio = gf100_devinit_mmio,
+ 	.preinit = gf100_devinit_preinit,
+ 	.init = nv50_devinit_init,
+ 	.post = nv04_devinit_post,
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ram.c b/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ram.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ram.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ram.c	2026-10-17 05:17:21.377404228 -0300
+@@ -199,6 +199,14 @@
+ 	return 0;
+ }
+ 
++int
++nvkm_ram_dryrun(struct nvkm_ram *ram, u32 freq, struct nvkm_ram_dryrun *out)
++{
++	if (!ram || !out || !ram->func->dryrun)
++		return -ENOSYS;
++	return ram->func->dryrun(ram, freq, out);
++}
++
+ void
+ nvkm_ram_del(struct nvkm_ram **pram)
+ {
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ram.h b/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ram.h
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ram.h	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ram.h	2026-10-17 05:17:21.376744469 -0300
+@@ -9,6 +9,7 @@
+ 		   enum nvkm_ram_type, u64 size, struct nvkm_ram **);
+ void nvkm_ram_del(struct nvkm_ram **);
+ int  nvkm_ram_init(struct nvkm_ram *);
++int  nvkm_ram_dryrun(struct nvkm_ram *, u32, struct nvkm_ram_dryrun *);
+ 
+ extern const struct nvkm_ram_func nv04_ram_func;
+ 
+@@ -26,6 +27,7 @@
+ u32  gf100_ram_probe_fbpa_amount(struct nvkm_device *, int);
+ int gf100_ram_init(struct nvkm_ram *);
+ int gf100_ram_calc(struct nvkm_ram *, u32);
++int gf100_ram_dryrun(struct nvkm_ram *, u32, struct nvkm_ram_dryrun *);
+ int gf100_ram_prog(struct nvkm_ram *);
+ void gf100_ram_tidy(struct nvkm_ram *);
+ 
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ramgf100.c b/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ramgf100.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ramgf100.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ramgf100.c	2026-10-17 22:54:53.801001865 -0300
+@@ -146,7 +146,8 @@
+ 	/* lookup memory config data relevant to the target frequency */
+ 	rammap.data = nvbios_rammapEm(bios, freq / 1000, &ver, &rammap.size,
+ 				      &cnt, &ramcfg.size, &cfg);
+-	if (!rammap.data || ver != 0x10 || rammap.size < 0x0e) {
++	if (!rammap.data ||
++	    ver != 0x10 || rammap.size < 0x0e) {
+ 		nvkm_error(subdev, "invalid/missing rammap entry\n");
+ 		return -EINVAL;
+ 	}
+@@ -159,24 +160,25 @@
+ 	}
+ 
+ 	ramcfg.data = rammap.data + rammap.size + (strap * ramcfg.size);
+-	if (!ramcfg.data || ver != 0x10 || ramcfg.size < 0x0e) {
++	if (!ramcfg.data ||
++	    ramcfg.size < 0x0e) {
+ 		nvkm_error(subdev, "invalid/missing ramcfg entry\n");
+ 		return -EINVAL;
+ 	}
+ 
+ 	/* lookup memory timings, if bios says they're present */
+-	strap = nvbios_rd08(bios, ramcfg.data + 0x01);
++	strap = nvbios_rd08(bios, ramcfg.data + (ver == 0x10 ? 1 : 0));
+ 	if (strap != 0xff) {
+-		timing.data = nvbios_timingEe(bios, strap, &ver, &timing.size,
+-					      &cnt, &len);
+-		if (!timing.data || ver != 0x10 || timing.size < 0x19) {
++		timing.data = nvbios_timingEe(bios, strap, &ver,
++					      &timing.size, &cnt, &len);
++		if (!timing.data ||
++		    ver != 0x10 || timing.size < 0x19) {
+ 			nvkm_error(subdev, "invalid/missing timing entry\n");
+ 			return -EINVAL;
+ 		}
+ 	} else {
+ 		timing.data = 0;
+ 	}
+-
+ 	ret = ram_init(fuc, ram->base.fb);
+ 	if (ret)
+ 		return ret;
+@@ -404,11 +406,109 @@
+ }
+ 
+ int
++gf100_ram_dryrun(struct nvkm_ram *base, u32 freq,
++		 struct nvkm_ram_dryrun *out)
++{
++	struct gf100_ram *ram = gf100_ram(base);
++	struct nvkm_subdev *subdev = &ram->base.fb->subdev;
++	struct nvkm_device *device = subdev->device;
++	struct nvkm_bios *bios = device->bios;
++	struct nvkm_clk *clk = device->clk;
++	struct nvbios_ramcfg cfg;
++	u8 ver = 0, cnt, len, strap;
++	struct { u32 data; u8 size; } rammap, ramcfg, timing;
++	int ref;
++	u32 div, out_freq;
++	u64 doubled_ref, quotient;
++
++	if (!out || !freq)
++		return -EINVAL;
++	memset(out, 0, sizeof(*out));
++	out->requested_khz = freq;
++
++	/* Inspect both table layouts without constructing or executing RAMFUC.
++	 * Parsing 0x11 does not make the legacy GF100 write sequence valid. */
++	out->failure_stage = "rammap";
++	rammap.data = nvbios_rammapEm(bios, freq / 1000, &ver, &rammap.size,
++				      &cnt, &ramcfg.size, &cfg);
++	out->rammap_ver = ver;
++	if (!rammap.data)
++		return -EINVAL;
++	if (ver != 0x10 && ver != 0x11)
++		return -EOPNOTSUPP;
++	if (rammap.size < (ver == 0x10 ? 0x0e : 0x12))
++		return -EINVAL;
++
++	out->failure_stage = "ramcfg";
++	strap = nvbios_ramcfg_index(subdev);
++	out->ramcfg_strap = strap;
++	if (strap >= cnt || ramcfg.size < (ver == 0x10 ? 0x0e : 0x0a))
++		return -EINVAL;
++	ramcfg.data = rammap.data + rammap.size + (strap * ramcfg.size);
++	/* RAMCFG 0x11 moves the timing index to byte zero. */
++	strap = nvbios_rd08(bios, ramcfg.data + (ver == 0x10 ? 1 : 0));
++	out->timing_index = strap;
++	if (strap != 0xff) {
++		out->failure_stage = "timing";
++		timing.data = nvbios_timingEe(bios, strap, &ver, &timing.size,
++					      &cnt, &len);
++		out->timing_ver = ver;
++		if (!timing.data)
++			return -EINVAL;
++		if (ver != 0x10 && ver != 0x20)
++			return -EOPNOTSUPP;
++		if (timing.size < (ver == 0x10 ? 0x19 : 0x33))
++			return -EINVAL;
++		out->timing_present = true;
++	}
++
++	/* We can parse GF117 RAMMAP 0x11/timing 0x20, but the GF100 RAMFUC
++	 * sequence does not consume the complete timing/RAMCFG data. Never let
++	 * an opt-in turn this parse into permission to program memory. */
++	if (out->rammap_ver != 0x10 ||
++	    (out->timing_present && out->timing_ver != 0x10)) {
++		out->failure_stage = "ram-sequence-unimplemented";
++		return -EOPNOTSUPP;
++	}
++	out->failure_stage = "reference-clock";
++
++	if (!clk)
++		return -ENODEV;
++	if (!(nvkm_rd32(device, 0x137300) & 0x00000100))
++		ref = nvkm_clk_read(clk, nv_clk_src_sppll0);
++	else
++		ref = nvkm_clk_read(clk, nv_clk_src_sppll1);
++	if (ref <= 0)
++		return ref ? ref : -ERANGE;
++	/* Keep the arithmetic wide: ref is an int from nvkm_clk_read(), while
++	 * freq is u32.  The original programming path assumes normal MHz values;
++	 * the dry-run must reject pathological input instead of overflowing. */
++	doubled_ref = (u64)(u32)ref * 2;
++	quotient = doubled_ref / freq;
++	quotient = min(quotient, (u64)65);
++	quotient = max(quotient, (u64)2);
++	div = (u32)quotient - 2;
++	quotient = doubled_ref / (div + 2);
++	if (quotient > U32_MAX)
++		return -ERANGE;
++	out_freq = (u32)quotient;
++	out->ref_khz = ref;
++	out->rounded_khz = out_freq;
++	out->failure_stage = NULL;
++	return 0;
++}
++
++int
+ gf100_ram_prog(struct nvkm_ram *base)
+ {
+ 	struct gf100_ram *ram = gf100_ram(base);
+ 	struct nvkm_device *device = ram->base.fb->subdev.device;
+-	ram_exec(&ram->fuc, nvkm_boolopt(device->cfgopt, "NvMemExec", true));
++	int ret = ram_exec(&ram->fuc,
++			   nvkm_boolopt(device->cfgopt, "NvMemExec", true));
++
++	if (device->chipset == 0xd7 &&
++	    nvkm_boolopt(device->cfgopt, "NvReclockFermiMemory", false))
++		return ret;
+ 	return 0;
+ }
+ 
+@@ -642,4 +742,4 @@
+-	ram->fuc.r_0x137310 = ramfuc_reg(0x137300);
++	ram->fuc.r_0x137300 = ramfuc_reg(0x137300);
+ 	ram->fuc.r_0x137310 = ramfuc_reg(0x137310);
+ 	ram->fuc.r_0x137360 = ramfuc_reg(0x137360);
+ 	ram->fuc.r_0x1373ec = ramfuc_reg(0x1373ec);
+@@ -661,6 +761,7 @@
+ 	.probe_fbpa_amount = gf100_ram_probe_fbpa_amount,
+ 	.init = gf100_ram_init,
+ 	.calc = gf100_ram_calc,
++	.dryrun = gf100_ram_dryrun,
+ 	.prog = gf100_ram_prog,
+ 	.tidy = gf100_ram_tidy,
+ };
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/memx.c b/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/memx.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/memx.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/memx.c	2026-10-17 22:48:37.144786043 -0300
+@@ -76,6 +76,7 @@
+ 	struct nvkm_subdev *subdev = &pmu->subdev;
+ 	struct nvkm_device *device = subdev->device;
+ 	u32 finish, reply[2];
++	int ret = 0;
+ 
+ 	/* flush the cache... */
+ 	memx_out(memx);
+@@ -86,14 +87,18 @@
+ 
+ 	/* call MEMX process to execute the script, and wait for reply */
+ 	if (exec) {
+-		nvkm_pmu_send(pmu, reply, PROC_MEMX, MEMX_MSG_EXEC,
+-			      memx->base, finish);
+-		nvkm_debug(subdev, "Exec took %uns, PMU_IN %08x\n",
+-			   reply[0], reply[1]);
++		ret = nvkm_pmu_send(pmu, reply, PROC_MEMX, MEMX_MSG_EXEC,
++				    memx->base, finish);
++		if (ret)
++			nvkm_error(subdev, "MEMX execution failed: %d\n", ret);
++		else
++			nvkm_debug(subdev, "Exec took %uns, PMU_IN %08x\n",
++				   reply[0], reply[1]);
+ 	}
+ 
+ 	kfree(memx);
+-	return 0;
++	*pmemx = NULL;
++	return ret;
+ }
+ 
+ void
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/therm/base.c b/drivers/gpu/drm/nouveau/nvkm/subdev/therm/base.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/therm/base.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/therm/base.c	2026-10-17 17:48:37.633524899 -0300
+@@ -34,6 +34,48 @@
+ 	return -ENODEV;
+ }
+ 
++int
++nvkm_therm_pwm_get(struct nvkm_therm *therm, int line, u32 *divs, u32 *duty)
++{
++	if (!therm || !divs || !duty)
++		return -EINVAL;
++	if (!therm->func || !therm->func->pwm_get)
++		return -ENODEV;
++	return therm->func->pwm_get(therm, line, divs, duty);
++}
++
++int
++nvkm_therm_pwm_enabled(struct nvkm_therm *therm, int line)
++{
++	if (!therm || !therm->func || !therm->func->pwm_enabled)
++		return -ENODEV;
++	return therm->func->pwm_enabled(therm, line);
++}
++
++int
++nvkm_therm_pwm_ctrl(struct nvkm_therm *therm, int line, bool enable)
++{
++	if (!therm || !therm->func || !therm->func->pwm_ctrl)
++		return -ENODEV;
++	return therm->func->pwm_ctrl(therm, line, enable);
++}
++
++int
++nvkm_therm_pwm_set(struct nvkm_therm *therm, int line, u32 divs, u32 duty)
++{
++	if (!therm || !therm->func || !therm->func->pwm_set)
++		return -ENODEV;
++	return therm->func->pwm_set(therm, line, divs, duty);
++}
++
++int
++nvkm_therm_pwm_clock(struct nvkm_therm *therm, int line)
++{
++	if (!therm || !therm->func || !therm->func->pwm_clock)
++		return -ENODEV;
++	return therm->func->pwm_clock(therm, line);
++}
++
+ static int
+ nvkm_therm_update_trip(struct nvkm_therm *therm)
+ {
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/therm/gf119.c b/drivers/gpu/drm/nouveau/nvkm/subdev/therm/gf119.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/therm/gf119.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/therm/gf119.c	2026-10-17 19:13:44.008462770 -0300
+@@ -87,6 +87,23 @@
+ }
+ 
+ int
++gf119_fan_pwm_enabled(struct nvkm_therm *therm, int line)
++{
++	struct nvkm_device *device = therm->subdev.device;
++	int indx = pwm_info(therm, line);
++
++	if (indx < 0)
++		return indx;
++	/* DUTY's upper bits are write/commit triggers, not output enables. */
++	if (indx < 2)
++		return (nvkm_rd32(device, 0x00d610 + (line * 0x04)) &
++			0x000000c0) == 0x00000040;
++	if (indx == 2)
++		return !!(nvkm_rd32(device, 0x0200d0) & 0x80000000);
++	return -ENODEV;
++}
++
++int
+ gf119_fan_pwm_set(struct nvkm_therm *therm, int line, u32 divs, u32 duty)
+ {
+ 	struct nvkm_device *device = therm->subdev.device;
+@@ -139,6 +156,7 @@
+ 	.fini = g84_therm_fini,
+ 	.pwm_ctrl = gf119_fan_pwm_ctrl,
+ 	.pwm_get = gf119_fan_pwm_get,
++	.pwm_enabled = gf119_fan_pwm_enabled,
+ 	.pwm_set = gf119_fan_pwm_set,
+ 	.pwm_clock = gf119_fan_pwm_clock,
+ 	.temp_get = g84_temp_get,
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/therm/priv.h b/drivers/gpu/drm/nouveau/nvkm/subdev/therm/priv.h
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/therm/priv.h	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/therm/priv.h	2026-10-17 17:01:25.140923514 -0300
+@@ -88,6 +88,7 @@
+ 
+ 	int (*pwm_ctrl)(struct nvkm_therm *, int line, bool);
+ 	int (*pwm_get)(struct nvkm_therm *, int line, u32 *, u32 *);
++	int (*pwm_enabled)(struct nvkm_therm *, int line);
+ 	int (*pwm_set)(struct nvkm_therm *, int line, u32, u32);
+ 	int (*pwm_clock)(struct nvkm_therm *, int line);
+ 
+@@ -123,6 +124,7 @@
+ 
+ int gf119_fan_pwm_ctrl(struct nvkm_therm *, int, bool);
+ int gf119_fan_pwm_get(struct nvkm_therm *, int, u32 *, u32 *);
++int gf119_fan_pwm_enabled(struct nvkm_therm *, int);
+ int gf119_fan_pwm_set(struct nvkm_therm *, int, u32, u32);
+ int gf119_fan_pwm_clock(struct nvkm_therm *, int);
+ void gf119_therm_init(struct nvkm_therm *);
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c b/drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c	2026-10-17 18:16:32.052011418 -0300
+@@ -156,6 +156,72 @@
+ 	return id ? id * 10000 : -ENODEV;
+ }
+ 
++/* Validate the requested voltage and regulator cap before any setter can
++ * modify the regulator. Unknown current voltage remains a hard failure. */
++int
++nvkm_volt_preflight(struct nvkm_volt *volt, u8 id, u8 temp,
++		    int *current_uv, int *limit_uv)
++{
++	u8 ids[3];
++	int target, cap, i;
++	bool current_known = true;
++
++	if (!current_uv || !limit_uv)
++		return -EINVAL;
++	*current_uv = -ENODEV;
++	*limit_uv = 0;
++	if (!volt)
++		return -ENODEV;
++	*current_uv = nvkm_volt_get(volt);
++	if (*current_uv <= 0) {
++		/* GF117's VBIOS PWM output can boot disabled. Its only safe
++		 * initialization is to write the bounded VBIOS target, then prove
++		 * it by readback before touching the core clock. */
++		if (*current_uv != -ENODEV || !volt->func->volt_set)
++			return *current_uv ? *current_uv : -ERANGE;
++		current_known = false;
++	}
++	target = nvkm_volt_map(volt, id, temp);
++	if (target <= 0)
++		return target ? target : -ERANGE;
++	if (!volt->max_uv || volt->max_uv > INT_MAX)
++		return -ERANGE;
++	cap = volt->max_uv;
++	ids[0] = volt->max0_id;
++	ids[1] = volt->max1_id;
++	ids[2] = volt->max2_id;
++	for (i = 0; i < ARRAY_SIZE(ids); i++) {
++		if (ids[i] != 0xff) {
++			int mapped = nvkm_volt_map(volt, ids[i], temp);
++
++			if (mapped <= 0)
++				return mapped ? mapped : -ERANGE;
++			cap = min(cap, mapped);
++		}
++	}
++	*limit_uv = cap;
++	if (target > cap || (current_known && *current_uv > cap))
++		return -ERANGE;
++	if (current_known && *current_uv >= target)
++		return target;
++	/* Check the voltage this backend can actually produce before changing it. */
++	if (volt->func->volt_roundup) {
++		target = volt->func->volt_roundup(volt, target);
++		if (target <= 0)
++			return target ? target : -ERANGE;
++		if (target > cap)
++			return -ERANGE;
++	}
++	/* PWM backends expose a continuous voltage range instead of VID entries. */
++	if (volt->func->volt_set)
++		return target;
++	for (i = 0; i < volt->vid_nr; i++) {
++		if (volt->vid[i].uv >= (u32)target && volt->vid[i].uv <= (u32)cap)
++			return target;
++	}
++	return -ERANGE;
++}
++
+ int
+ nvkm_volt_set_id(struct nvkm_volt *volt, u8 id, u8 min_id, u8 temp,
+ 		 int condition)
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/volt/gf117.c b/drivers/gpu/drm/nouveau/nvkm/subdev/volt/gf117.c
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/volt/gf117.c	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/volt/gf117.c	2026-10-17 19:12:17.959363688 -0300
+@@ -23,7 +23,132 @@
+  */
+ #include "priv.h"
+ 
++#include <subdev/bios.h>
++#include <subdev/bios/volt.h>
+ #include <subdev/fuse.h>
++#include <subdev/gpio.h>
++#include <subdev/therm.h>
++
++#include <linux/math64.h>
++
++struct gf117_volt {
++	struct nvkm_volt base;
++	struct nvbios_volt bios;
++	u8 pwm_line;
++};
++
++static int
++gf117_volt_pwm_get(struct nvkm_volt *base)
++{
++	struct gf117_volt *volt = container_of(base, struct gf117_volt, base);
++	struct nvkm_device *device = base->subdev.device;
++	u32 divs, duty;
++	u64 uv;
++	int ret, enabled;
++
++	if (!device->therm || !volt->bios.pwm_freq || !volt->bios.pwm_range)
++		return -ENODEV;
++
++	enabled = nvkm_therm_pwm_enabled(device->therm, volt->pwm_line);
++	if (enabled <= 0)
++		return enabled ? enabled : -ENODEV;
++
++	ret = nvkm_therm_pwm_get(device->therm, volt->pwm_line, &divs, &duty);
++	if (ret)
++		return ret;
++	/* PNVIO duty bit 31 triggers a write; it is not an enable indication.
++	 * PTHERM get already masks its 13-bit fields. Only counter fields enter
++	 * the voltage calculation, as in the existing PWM voltage backend. */
++	divs &= 0x00ffffff;
++	duty &= 0x00ffffff;
++	if (!divs || duty > divs)
++		return -ERANGE;
++
++	/* The VBIOS PWM transfer function depends on duty/period. Read the
++	 * current command without requiring the setter's nominal period and
++	 * without reprogramming the existing PWM clock. */
++	uv = volt->bios.base + div_u64((u64)volt->bios.pwm_range * duty, divs);
++	if (base->min_uv > base->max_uv || uv < base->min_uv ||
++	    uv > base->max_uv || uv > INT_MAX)
++		return -ERANGE;
++	return uv;
++}
++
++static int
++gf117_volt_pwm_calc(struct nvkm_volt *base, u32 uv, u32 *divs_out,
++		    u32 *duty_out)
++{
++	struct gf117_volt *volt = container_of(base, struct gf117_volt, base);
++	struct nvkm_device *device = base->subdev.device;
++	u64 max_uv, duty, effective_uv;
++	u32 divs;
++	int clock;
++
++	if (!device->therm || !volt->bios.pwm_freq || !volt->bios.pwm_range)
++		return -ENODEV;
++	max_uv = (u64)volt->bios.base + volt->bios.pwm_range;
++	if (max_uv > INT_MAX || uv < base->min_uv || uv > base->max_uv ||
++	    uv < volt->bios.base || uv > max_uv)
++		return -ERANGE;
++
++	clock = nvkm_therm_pwm_clock(device->therm, volt->pwm_line);
++	if (clock <= 0)
++		return -ENODEV;
++	/* Match the nearest representable period; the readback accepts only the
++	 * adjacent integer periods around the VBIOS frequency. */
++	divs = DIV_ROUND_CLOSEST((u32)clock, volt->bios.pwm_freq);
++	if (!divs || divs > 0x1fff)
++		return -ERANGE;
++	duty = div_u64((u64)(uv - volt->bios.base) * divs +
++		       volt->bios.pwm_range - 1, volt->bios.pwm_range);
++	if (duty > divs)
++		return -ERANGE;
++	effective_uv = volt->bios.base +
++		div_u64((u64)volt->bios.pwm_range * duty, divs);
++	if (effective_uv > base->max_uv || effective_uv > INT_MAX)
++		return -ERANGE;
++	*divs_out = divs;
++	*duty_out = duty;
++	return effective_uv;
++}
++
++static int
++gf117_volt_pwm_roundup(struct nvkm_volt *base, u32 uv)
++{
++	u32 divs, duty;
++	int ret = gf117_volt_pwm_calc(base, uv, &divs, &duty);
++
++	return ret;
++}
++
++static int
++gf117_volt_pwm_set(struct nvkm_volt *base, u32 uv)
++{
++	struct gf117_volt *volt = container_of(base, struct gf117_volt, base);
++	struct nvkm_device *device = base->subdev.device;
++	u32 divs, duty;
++	int ret, readback, effective_uv;
++
++	effective_uv = gf117_volt_pwm_calc(base, uv, &divs, &duty);
++	if (effective_uv <= 0)
++		return effective_uv ? effective_uv : -ERANGE;
++
++	ret = nvkm_therm_pwm_set(device->therm, volt->pwm_line, divs, duty);
++	if (ret)
++		return ret;
++	ret = nvkm_therm_pwm_ctrl(device->therm, volt->pwm_line, true);
++	if (ret)
++		return ret;
++
++	/* Confirm the programmed command is active and does not undershoot the
++	 * requested setpoint before the clock transaction proceeds. */
++	readback = gf117_volt_pwm_get(base);
++	if (readback < 0)
++		return readback;
++	if (readback < effective_uv || readback > base->max_uv)
++		return -ERANGE;
++	return 0;
++}
+ 
+ static int
+ gf117_volt_speedo_read(struct nvkm_volt *volt)
+@@ -37,25 +162,58 @@
+ 	return nvkm_fuse_read(fuse, 0x3a8);
+ }
+ 
+-static const struct nvkm_volt_func
+-gf117_volt = {
++static const struct nvkm_volt_func gf117_volt_gpio = {
+ 	.oneinit = gf100_volt_oneinit,
+ 	.vid_get = nvkm_voltgpio_get,
+ 	.vid_set = nvkm_voltgpio_set,
+ 	.speedo_read = gf117_volt_speedo_read,
+ };
+ 
++static const struct nvkm_volt_func gf117_volt_pwm = {
++	.oneinit = gf100_volt_oneinit,
++	.volt_get = gf117_volt_pwm_get,
++	.volt_set = gf117_volt_pwm_set,
++	.volt_roundup = gf117_volt_pwm_roundup,
++	.speedo_read = gf117_volt_speedo_read,
++};
++
+ int
+ gf117_volt_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
+ 	       struct nvkm_volt **pvolt)
+ {
+-	struct nvkm_volt *volt;
+-	int ret;
+-
+-	ret = nvkm_volt_new_(&gf117_volt, device, type, inst, &volt);
+-	*pvolt = volt;
+-	if (ret)
+-		return ret;
++	const struct nvkm_volt_func *func = &gf117_volt_gpio;
++	struct gf117_volt *volt;
++	struct nvbios_volt bios;
++	struct dcb_gpio_func gpio;
++	u8 ver, hdr, cnt, len;
++	bool pwm = false;
++	int ret = 0;
++	*pvolt = NULL;
++
++	if (device->bios &&
++	    nvbios_volt_parse(device->bios, &ver, &hdr, &cnt, &len, &bios) &&
++	    bios.type == NVBIOS_VOLT_PWM) {
++		/* GF117 uses the GF119 thermal PWM router. Only expose PWM voltage
++		 * readback when the VBIOS explicitly maps a PWM VID GPIO line. */
++		if (!device->gpio || !bios.pwm_freq || !bios.pwm_range ||
++		    nvkm_gpio_find(device->gpio, 0, DCB_GPIO_VID_PWM, 0xff, &gpio) ||
++		    !gpio.param || gpio.line >= 32)
++			return 0;
++		func = &gf117_volt_pwm;
++		pwm = true;
++	}
++
++	volt = kzalloc_obj(*volt);
++	if (!volt)
++		return -ENOMEM;
++	nvkm_volt_ctor(func, device, type, inst, &volt->base);
++	*pvolt = &volt->base;
++	if (pwm) {
++		volt->bios = bios;
++		volt->pwm_line = gpio.line;
++	} else {
++		ret = nvkm_voltgpio_init(&volt->base);
++	}
+ 
+-	return nvkm_voltgpio_init(volt);
++	return ret;
+ }
+diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.cmd' '--exclude=*.d' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=*.mod.o' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=.*.cmd' '--exclude=.*.d' a/drivers/gpu/drm/nouveau/nvkm/subdev/volt/priv.h b/drivers/gpu/drm/nouveau/nvkm/subdev/volt/priv.h
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/volt/priv.h	2026-10-03 09:48:53.000000000 -0300
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/volt/priv.h	2026-10-17 18:16:32.052011418 -0300
+@@ -13,6 +13,7 @@
+ 	int (*oneinit)(struct nvkm_volt *);
+ 	int (*volt_get)(struct nvkm_volt *);
+ 	int (*volt_set)(struct nvkm_volt *, u32 uv);
++	int (*volt_roundup)(struct nvkm_volt *, u32 uv);
+ 	int (*vid_get)(struct nvkm_volt *);
+ 	int (*vid_set)(struct nvkm_volt *, u8 vid);
+ 	int (*set_id)(struct nvkm_volt *, u8 id, int condition);
+
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/memx.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/memx.c
+@@ -43,11 +43,18 @@
+ int
+ nvkm_memx_init(struct nvkm_pmu *pmu, struct nvkm_memx **pmemx)
+ {
+-	struct nvkm_device *device = pmu->subdev.device;
++	struct nvkm_device *device;
+ 	struct nvkm_memx *memx;
+ 	u32 reply[2];
+ 	int ret;
+ 
++	if (!pmemx)
++		return -EINVAL;
++	*pmemx = NULL;
++	if (!pmu)
++		return -ENODEV;
++	device = pmu->subdev.device;
++
+ 	ret = nvkm_pmu_send(pmu, reply, PROC_MEMX, MEMX_MSG_INFO,
+ 			    MEMX_INFO_DATA, 0);
+ 	if (ret)
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/gt215.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/gt215.c
+@@ -206,19 +206,21 @@
+ 	/* Inhibit interrupts, and wait for idle. */
+ 	if (pmu->func->enabled(pmu)) {
+ 		nvkm_wr32(device, 0x10a014, 0x0000ffff);
+-		nvkm_msec(device, 2000,
++		if (nvkm_msec(device, 2000,
+ 			if (!nvkm_rd32(device, 0x10a04c))
+ 				break;
+-		);
++		) < 0)
++			return -EBUSY;
+ 	}
+ 
+ 	pmu->func->reset(pmu);
+ 
+ 	/* Wait for IMEM/DMEM scrubbing to be complete. */
+-	nvkm_msec(device, 2000,
++	if (nvkm_msec(device, 2000,
+ 		if (!(nvkm_rd32(device, 0x10a10c) & 0x00000006))
+ 			break;
+-	);
++	) < 0)
++		return -EBUSY;
+ 
+ 	/* upload data segment */
+ 	nvkm_wr32(device, 0x10a1c0, 0x01000000);
+
+--- a/drivers/gpu/drm/nouveau/include/nvkm/subdev/pmu.h
++++ b/drivers/gpu/drm/nouveau/include/nvkm/subdev/pmu.h
+@@ -21,6 +21,8 @@
+ 		struct mutex mutex;
+ 		u32 base;
+ 		u32 size;
++		/* Lost transport state must not be reused before PMU reinit. */
++		bool failed;
+ 	} send;
+ 
+ 	struct {
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/gt215.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/gt215.c
+@@ -24,6 +24,7 @@
+ #include "priv.h"
+ #include "fuc/gt215.fuc3.h"
+ 
++#include <linux/jiffies.h>
+ #include <subdev/timer.h>
+ 
+ int
+@@ -35,6 +36,11 @@
+ 	u32 addr;
+ 
+ 	mutex_lock(&pmu->send.mutex);
++	if (READ_ONCE(pmu->send.failed)) {
++		mutex_unlock(&pmu->send.mutex);
++		return -EIO;
++	}
++
+ 	/* wait for a free slot in the fifo */
+ 	addr  = nvkm_rd32(device, 0x10a4a0);
+ 	if (nvkm_msec(device, 2000,
+@@ -52,13 +58,20 @@
+ 	 */
+ 	if (reply) {
+ 		pmu->recv.message = message;
+-		pmu->recv.process = process;
++		WRITE_ONCE(pmu->recv.process, process);
+ 	}
+ 
+ 	/* acquire data segment access */
+-	do {
++	if (nvkm_msec(device, 2000,
+ 		nvkm_wr32(device, 0x10a580, 0x00000001);
+-	} while (nvkm_rd32(device, 0x10a580) != 0x00000001);
++		if (nvkm_rd32(device, 0x10a580) == 0x00000001)
++			break;
++	) < 0) {
++		WRITE_ONCE(pmu->send.failed, true);
++		WRITE_ONCE(pmu->recv.process, 0);
++		mutex_unlock(&pmu->send.mutex);
++		return -EBUSY;
++	}
+ 
+ 	/* write the packet */
+ 	nvkm_wr32(device, 0x10a1c0, 0x01000000 | (((addr & 0x07) << 4) +
+@@ -74,7 +87,18 @@
+ 
+ 	/* wait for reply, if requested */
+ 	if (reply) {
+-		wait_event(pmu->recv.wait, (pmu->recv.process == 0));
++		if (!wait_event_timeout(pmu->recv.wait,
++					READ_ONCE(pmu->recv.process) == 0,
++					msecs_to_jiffies(2000))) {
++			WRITE_ONCE(pmu->send.failed, true);
++			WRITE_ONCE(pmu->recv.process, 0);
++			mutex_unlock(&pmu->send.mutex);
++			return -ETIMEDOUT;
++		}
++		if (READ_ONCE(pmu->send.failed)) {
++			mutex_unlock(&pmu->send.mutex);
++			return -EIO;
++		}
+ 		reply[0] = pmu->recv.data[0];
+ 		reply[1] = pmu->recv.data[1];
+ 	}
+@@ -96,9 +120,19 @@
+ 		return;
+ 
+ 	/* acquire data segment access */
+-	do {
++	if (nvkm_msec(device, 2000,
+ 		nvkm_wr32(device, 0x10a580, 0x00000002);
+-	} while (nvkm_rd32(device, 0x10a580) != 0x00000002);
++		if (nvkm_rd32(device, 0x10a580) == 0x00000002)
++			break;
++	) < 0) {
++		nvkm_warn(subdev, "timeout acquiring PMU receive data segment\n");
++		WRITE_ONCE(pmu->send.failed, true);
++		if (READ_ONCE(pmu->recv.process)) {
++			WRITE_ONCE(pmu->recv.process, 0);
++			wake_up(&pmu->recv.wait);
++		}
++		return;
++	}
+ 
+ 	/* read the packet */
+ 	nvkm_wr32(device, 0x10a1c0, 0x02000000 | (((addr & 0x07) << 4) +
+@@ -113,12 +147,12 @@
+ 	nvkm_wr32(device, 0x10a580, 0x00000000);
+ 
+ 	/* wake process if it's waiting on a synchronous reply */
+-	if (pmu->recv.process) {
+-		if (process == pmu->recv.process &&
++	if (READ_ONCE(pmu->recv.process)) {
++		if (process == READ_ONCE(pmu->recv.process) &&
+ 		    message == pmu->recv.message) {
+ 			pmu->recv.data[0] = data0;
+ 			pmu->recv.data[1] = data1;
+-			pmu->recv.process = 0;
++			WRITE_ONCE(pmu->recv.process, 0);
+ 			wake_up(&pmu->recv.wait);
+ 			return;
+ 		}
+@@ -258,6 +292,7 @@
+ 	pmu->recv.base = nvkm_rd32(device, 0x10a4dc) & 0x0000ffff;
+ 	pmu->recv.size = nvkm_rd32(device, 0x10a4dc) >> 16;
+ 
++	WRITE_ONCE(pmu->send.failed, false);
+ 	nvkm_wr32(device, 0x10a010, 0x000000e0);
+ 	return 0;
+ }
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/memx.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/memx.c
+@@ -2,6 +2,8 @@
+ #ifndef __NVKM_PMU_MEMX_H__
+ #define __NVKM_PMU_MEMX_H__
+ #include "priv.h"
++
++#include <subdev/timer.h>
+ 
+ struct nvkm_memx {
+ 	struct nvkm_pmu *pmu;
+@@ -68,9 +70,16 @@
+ 	memx->size = reply[1];
+ 
+ 	/* acquire data segment access */
+-	do {
++	if (nvkm_msec(device, 2000,
+ 		nvkm_wr32(device, 0x10a580, 0x00000003);
+-	} while (nvkm_rd32(device, 0x10a580) != 0x00000003);
++		if (nvkm_rd32(device, 0x10a580) == 0x00000003)
++			break;
++	) < 0) {
++		WRITE_ONCE(pmu->send.failed, true);
++		kfree(memx);
++		*pmemx = NULL;
++		return -EBUSY;
++	}
+ 	nvkm_wr32(device, 0x10a1c0, 0x01000000 | memx->base);
+ 	return 0;
+ }

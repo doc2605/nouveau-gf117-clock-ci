@@ -1,0 +1,20 @@
+From: Codex <noreply@openai.com>
+Subject: [PATCH] nouveau: keep GF117 DDR3 reclocking explicitly unsupported
+
+GF117 RAMMAP 0x11/timing 0x20 sequencing is not validated. Reject every
+GF117 RAM calculation before RAMFUC initialization so the PMU bootstrap
+experiment cannot accidentally enter a memory transition.
+
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ramgf100.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/fb/ramgf100.c
+@@ -143,6 +143,10 @@
+ 	int N1, M1, P;
+ 	int ret;
+ 
++	/* GF117 DDR3 sequence is unverified; block before RAMFUC init. */
++	if (device->chipset == 0xd7)
++		return -EOPNOTSUPP;
++
+ 	/* lookup memory config data relevant to the target frequency */
+ 	rammap.data = nvbios_rammapEm(bios, freq / 1000, &ver, &rammap.size,
+ 				      &cnt, &ramcfg.size, &cfg);

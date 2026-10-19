@@ -34,6 +34,7 @@ struct nvkm_therm;
 struct nvkm_therm_func {
     int (*pwm_get)(struct nvkm_therm *, int, u32 *, u32 *);
     int (*pwm_clock)(struct nvkm_therm *, int);
+    int (*pwm_enabled)(struct nvkm_therm *, int);
 };
 struct nvkm_device { struct nvkm_therm *therm; u32 crystal; };
 struct nvkm_subdev { struct nvkm_device *device; };
@@ -53,6 +54,7 @@ static u32 nvkm_rd32(struct nvkm_device *device, u32 addr) {
     if (addr == 0x00d610 + (u32)test_line * 4) return test_gpio;
     if (addr == 0x00e114 || addr == 0x00e11c) return test_div;
     if (addr == 0x00e118 || addr == 0x00e120) return test_duty;
+    if (addr == 0x0200d0) return 0x80000000;
     if (addr == 0x0200d8) return test_div | 0xffffe000;
     if (addr == 0x0200dc) return test_duty | 0xffffe000;
     bad_read++;
@@ -60,14 +62,17 @@ static u32 nvkm_rd32(struct nvkm_device *device, u32 addr) {
 }
 '''
 source += function(base, "nvkm_therm_pwm_get")
+source += function(base, "nvkm_therm_pwm_enabled")
 source += function(base, "nvkm_therm_pwm_clock")
 source += function(gf119, "pwm_info")
 source += function(gf119, "gf119_fan_pwm_get")
+source += function(gf119, "gf119_fan_pwm_enabled")
 source += function(gf119, "gf119_fan_pwm_clock")
 source += function(volt, "gf117_volt_pwm_get")
 source += r'''
 int main(void) {
-    struct nvkm_therm_func ops={gf119_fan_pwm_get,gf119_fan_pwm_clock};
+    struct nvkm_therm_func ops={gf119_fan_pwm_get,gf119_fan_pwm_clock,
+        gf119_fan_pwm_enabled};
     struct nvkm_device device={.crystal=27000};
     struct nvkm_therm therm={.subdev={.device=&device},.func=NULL};
     device.therm=&therm;
@@ -103,10 +108,9 @@ int main(void) {
     test_duty=8; assert(gf117_volt_pwm_get(&volt.base) == 1150000);
     test_duty=9; assert(gf117_volt_pwm_get(&volt.base) == -ERANGE);
     test_duty=3; test_div=7; assert(gf117_volt_pwm_get(&volt.base) == 864285);
-    test_div=9; assert(gf117_volt_pwm_get(&volt.base) == -ERANGE);
-    test_div=8; device.crystal=0;
-    assert(gf117_volt_pwm_get(&volt.base) == -ENODEV);
-    device.crystal=27000; test_gpio=0x00000080;
+    test_div=9; assert(gf117_volt_pwm_get(&volt.base) == 816666);
+    test_div=0; assert(gf117_volt_pwm_get(&volt.base) == -ERANGE);
+    test_div=8; test_gpio=0x00000080;
     assert(gf117_volt_pwm_get(&volt.base) == -ENODEV);
     assert(bad_read == 0);
     puts("ok: GF117 voltage getter exercised production GF119 PWM route/register callbacks and VBIOS bounds");

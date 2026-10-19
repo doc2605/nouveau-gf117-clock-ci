@@ -21,9 +21,9 @@ assert "nvkm_gpio_find(gpio, 0, DCB_GPIO_VID_PWM" in probe
 assert "vid_pwm.line" in probe
 assert probe.index("nvkm_gpio_find(gpio") < probe.index("switch (gpio_value")
 assert "u32 div = 0, duty = 0;" in probe
-assert "int pwm_enabled = 0;" in probe
+assert "int pwm_route_valid = 0;" in probe
 assert "pwm_index == 2 ||" in probe
-assert "pwm_enabled = 1;" in probe
+assert "pwm_route_valid = 1;" in probe
 channel_reads = {
     0: ("0x00e114", "0x00e118"),
     1: ("0x00e11c", "0x00e120"),
@@ -154,7 +154,7 @@ static int check(int line, u32 gpio, int index, int enabled, u32 first, u32 seco
 		if (read_count != 1) return 2;
 		char expected[160];
 		snprintf(expected, sizeof(expected),
-			 "vbios_vid_pwm_line=%d gpio=%08x pwm_index=-1 pwm_enabled=0 "
+			 "vbios_vid_pwm_line=%d gpio=%08x pwm_index=-1 pwm_route_valid=0 "
 			 "selected=00000000/00000000 gpio_lookup=0", line, gpio);
 		if (!strstr(output.text, expected))
 			return 3;
@@ -168,7 +168,7 @@ static int check(int line, u32 gpio, int index, int enabled, u32 first, u32 seco
 	}
 	char expected[160];
 	snprintf(expected, sizeof(expected),
-		 "vbios_vid_pwm_line=%d gpio=%08x pwm_index=%d pwm_enabled=%d "
+		 "vbios_vid_pwm_line=%d gpio=%08x pwm_index=%d pwm_route_valid=%d "
 		 "selected=%08x/%08x gpio_lookup=0",
 		 line, gpio, index, enabled, div, duty);
 	return strstr(output.text, expected) ? 0 : 5;
@@ -191,7 +191,7 @@ int main(void)
 	read_count = 0;
 	run_probe(&drm, &output);
 	if (read_count != 0 || !strstr(output.text,
-	    "vbios_vid_pwm_line=-1 gpio=00000000 pwm_index=-1 pwm_enabled=0 "
+	    "vbios_vid_pwm_line=-1 gpio=00000000 pwm_index=-1 pwm_route_valid=0 "
 	    "selected=00000000/00000000 gpio_lookup=-2")) return 18;
 	vid_pwm_line = 32;
 	gpio_lookup_result = 0;
@@ -199,7 +199,7 @@ int main(void)
 	read_count = 0;
 	run_probe(&drm, &output);
 	if (read_count != 0 || !strstr(output.text,
-	    "vbios_vid_pwm_line=-1 gpio=00000000 pwm_index=-1 pwm_enabled=0 "
+	    "vbios_vid_pwm_line=-1 gpio=00000000 pwm_index=-1 pwm_route_valid=0 "
 	    "selected=00000000/00000000 gpio_lookup=-34")) return 19;
 	return 0;
 }

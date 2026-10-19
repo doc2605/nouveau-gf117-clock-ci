@@ -15,9 +15,13 @@ curl --fail --location --retry 3 --output work/source.tar.gz \
 printf '%s  %s\n' 2da9e6ffe31436657f46909db059059946dac22c2ac6cde05e49a66d61acfcba work/source.tar.gz | sha256sum -c -
 tar -xzf work/source.tar.gz -C work cachyos-7.2.9-2/drivers/gpu/drm/nouveau
 src="$repo/work/cachyos-7.2.9-2"
-for patch in "$repo"/patches/nouveau/*.patch; do
-    patch --batch --fuzz=0 -d "$src" -p1 -i "$patch"
-done
+patch --batch --fuzz=0 -d "$src" -p1 \
+    -i "$repo/patches/nouveau/gf117-consolidated.patch"
+patch --batch --fuzz=0 -d "$src" -p1 \
+    -i "$repo/experimental/patches/0044-nouveau-gf117-pmu-fuc3-explicit-optin.patch"
+patch --batch --fuzz=0 -d "$src" -p1 \
+    -i "$repo/experimental/patches/0045-nouveau-gf117-ddr3-hard-block.patch"
+python3 tools/test-gf117-pmu-optin.py
 for test in core ram vga crtc worker pll; do
     python3 "tools/test-gf117-$test-source.py" "$src"
 done
@@ -29,6 +33,8 @@ make -C "$repo/work/build" LLVM=1 LLVM_IAS=1 -j"$(nproc)" \
     M="$src/drivers/gpu/drm/nouveau" modules
 module="$src/drivers/gpu/drm/nouveau/nouveau.ko"
 [[ "$(modinfo -F vermagic "$module" | xargs)" == '7.2.9-2-cachyos SMP preempt mod_unload' ]]
+llvm-nm --defined-only "$module" | grep -q 'gf117_pmu_new'
+grep -a -q 'NvGf117Pmu' "$module"
 python3 - "$module" <<'MANIFEST'
 import hashlib,json,os,subprocess,sys
 from pathlib import Path
@@ -41,7 +47,13 @@ manifest=dict(kernel='7.2.9-2-cachyos',commit=os.environ.get('GITHUB_SHA'),
     symvers_sha256=sha(root/'work/build/Module.symvers'),
     compiler=subprocess.check_output(['clang','--version'],text=True).splitlines()[0],
     vermagic=subprocess.check_output(['modinfo','-F','vermagic',str(module)],text=True).strip(),
-    patches={p.name:sha(p) for p in sorted((root/'patches/nouveau').glob('*.patch'))})
+    source_files={name:sha(root/'work/cachyos-7.2.9-2/drivers/gpu/drm/nouveau'/name)
+        for name in ('nvkm/engine/device/base.c','nvkm/subdev/pmu/Kbuild',
+                     'include/nvkm/subdev/pmu.h','nvkm/subdev/pmu/gf117.c',
+                     'nvkm/subdev/fb/ramgf100.c')},
+    patches={'consolidated':sha(root/'patches/nouveau/gf117-consolidated.patch'),
+        'experimental_pmu':sha(root/'experimental/patches/0044-nouveau-gf117-pmu-fuc3-explicit-optin.patch'),
+        'ddr3_hard_block':sha(root/'experimental/patches/0045-nouveau-gf117-ddr3-hard-block.patch')})
 (root/'ci-output/manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print(json.dumps(manifest,indent=2))
 MANIFEST
