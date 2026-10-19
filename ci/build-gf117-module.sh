@@ -33,7 +33,8 @@ make -C "$repo/work/build" LLVM=1 LLVM_IAS=1 -j"$(nproc)" \
     M="$src/drivers/gpu/drm/nouveau" modules
 module="$src/drivers/gpu/drm/nouveau/nouveau.ko"
 [[ "$(modinfo -F vermagic "$module" | xargs)" == '7.2.9-2-cachyos SMP preempt mod_unload' ]]
-llvm-nm --defined-only "$module" | grep -q 'gf117_pmu_new'
+llvm-nm --defined-only "$module" > ci-output/nouveau.symbols
+grep -q 'gf117_pmu_new' ci-output/nouveau.symbols
 grep -a -q 'NvGf117Pmu' "$module"
 python3 - "$module" <<'MANIFEST'
 import hashlib,json,os,subprocess,sys
