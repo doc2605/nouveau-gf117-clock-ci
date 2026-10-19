@@ -1,0 +1,38 @@
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/Kbuild
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/Kbuild
+@@ -4,6 +4,8 @@ nvkm-y += nvkm/subdev/pmu/memx.o
+ nvkm-y += nvkm/subdev/pmu/gt215.o
+ nvkm-y += nvkm/subdev/pmu/gf100.o
+ nvkm-y += nvkm/subdev/pmu/gf117.o
++nvkm-y += nvkm/subdev/pmu/gf117_timer_probe.o
++nvkm-y += nvkm/subdev/pmu/gf117_timer_probe_pmu.o
+ nvkm-y += nvkm/subdev/pmu/gf119.o
+ nvkm-y += nvkm/subdev/pmu/gk104.o
+ nvkm-y += nvkm/subdev/pmu/gk110.o
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/gf117.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/pmu/gf117.c
+@@ -10,6 +10,8 @@
+ 
+ int gf100_pmu_new(struct nvkm_device *, enum nvkm_subdev_type, int,
+ 		  struct nvkm_pmu **);
++int gf117_timer_probe_pmu_new(struct nvkm_device *, enum nvkm_subdev_type, int,
++			      struct nvkm_pmu **);
+ 
+ int
+ gf117_pmu_new(struct nvkm_device *device, enum nvkm_subdev_type type, int inst,
+@@ -19,9 +21,13 @@
+ 		return -EINVAL;
+ 	*ppmu = NULL;
+ 
++	if (!device || device->chipset != 0xd7)
++		return -ENODEV;
++	if (nvkm_boolopt(device->cfgopt, "NvGf117TimerProbe", false))
++		return gf117_timer_probe_pmu_new(device, type, inst, ppmu);
++
+ 	/* The GF117 dispatch entry is present for this opt-in gate only. */
+-	if (!device || device->chipset != 0xd7 ||
+-	    !nvkm_boolopt(device->cfgopt, "NvGf117Pmu", false))
++	if (!nvkm_boolopt(device->cfgopt, "NvGf117Pmu", false))
+ 		return -ENODEV;
+ 
+ 	return gf100_pmu_new(device, type, inst, ppmu);

@@ -7,7 +7,8 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / 'work/cachyos-7.2.9-2/drivers/gpu/drm/nouveau'
+SRC = Path(os.environ.get('GF117_NOUVEAU_SRC', str(
+    ROOT / 'work/cachyos-7.2.9-2/drivers/gpu/drm/nouveau')))
 PATCH = ROOT / 'experimental/patches/0044-nouveau-gf117-pmu-fuc3-explicit-optin.patch'
 
 patch_text = PATCH.read_text()
@@ -24,11 +25,11 @@ expected_sources = {
     'nvkm/engine/device/base.c':
         '97c7158a25fb10b603b43dd8b6e02f26e17da75442b7b388dec420142c2c52bc',
     'nvkm/subdev/pmu/Kbuild':
-        '4c6fd9b1c9b13e99432d2abbef1147f3a64d6264c24690e8c66b377d091f5dee',
+        'f4826ea84aa6d88d86b07970e006963436224734bcded80e5aa21d8ed58dd98b',
     'include/nvkm/subdev/pmu.h':
         '77be5e7541e627255b5d74612c9eb465f8758d56c0bc64ad49d62f1c9df64c33',
     'nvkm/subdev/pmu/gf117.c':
-        '6cf6bf26eccff2b0bd9e224ea5e96a7097a0ae3f68f58c29e99e9fb812153d64',
+        '6de60918f8a29df48705332d32ca409388258eebe2d2a327e61cf33df8f5aa0e',
 }
 if all((SRC / path).is_file() for path in expected_sources):
     for path, expected in expected_sources.items():

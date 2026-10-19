@@ -1,0 +1,24 @@
+/* SPDX-License-Identifier: MIT */
+/* Replaces Nouveau's generic test.fuc only in a temporary assembler overlay. */
+#ifdef INCLUDE_PROC
+process(PROC_TEST, #timer_probe_init, #timer_probe_recv)
+#endif
+
+#ifdef INCLUDE_DATA
+#endif
+
+#ifdef INCLUDE_CODE
+// Reply to each host request with one read of the Falcon-local timer.
+// $r15 is the current PROC_TEST context; recv() supplies the request message
+// in $r13. The response echoes that message so gt215_pmu_send() can match it.
+timer_probe_recv:
+	nv_iord($r12, NV_PPWR_TIMER_LOW)
+	clear b32 $r11
+	imm32($r14, PROC_HOST)
+	call(send)
+	ret
+
+// No timer scheduling or startup delay is needed by this diagnostic process.
+timer_probe_init:
+	ret
+#endif

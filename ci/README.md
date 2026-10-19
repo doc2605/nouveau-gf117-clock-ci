@@ -13,8 +13,12 @@ patch/source/config hashes, vermagic and full build log. Workflow permissions
 are limited to `contents:read`.
 
 The real-source harnesses cover core/voltage, RAM, VGA, CRTC, worker completion,
-PLL, and GF117 PWM readback. Helper parsing uses fixtures and does not load a
-module or write GPU registers.
+PLL, GF117 PWM readback, and the isolated timer-probe dispatch. The probe code
+is compiled into the artifact, but `NvGf117TimerProbe` defaults off and its
+constructor returns `-EOPNOTSUPP` while recovery remains unverified. The timer
+firmware header and source hashes are recorded in the artifact manifest. CI
+does not initialize or execute the Falcon; helper parsing uses fixtures and
+does not load a module or write GPU registers.
 
 The public repository contains only Nouveau patches, source tests, CI scripts
 and the kernel header bundle. It contains no proprietary driver files, VBIOS

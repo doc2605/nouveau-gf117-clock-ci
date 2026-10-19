@@ -21,7 +21,23 @@ patch --batch --fuzz=0 -d "$src" -p1 \
     -i "$repo/experimental/patches/0044-nouveau-gf117-pmu-fuc3-explicit-optin.patch"
 patch --batch --fuzz=0 -d "$src" -p1 \
     -i "$repo/experimental/patches/0045-nouveau-gf117-ddr3-hard-block.patch"
+patch --batch --fuzz=0 -d "$src" -p1 \
+    -i "$repo/experimental/patches/0046-nouveau-gf117-falcon-timer-probe-dispatch.patch"
+probe_dir="$src/drivers/gpu/drm/nouveau/nvkm/subdev/pmu"
+mkdir -p "$probe_dir/fuc"
+cp experimental/fermi/gf117-falcon-timer-probe/host.c \
+    "$probe_dir/gf117_timer_probe.c"
+cp experimental/fermi/gf117-falcon-timer-probe/host.h \
+    "$probe_dir/host.h"
+cp experimental/fermi/gf117-falcon-timer-probe/pmu_provider.c \
+    "$probe_dir/gf117_timer_probe_pmu.c"
+cp experimental/fermi/gf117-falcon-timer-probe/gf117_timer_probe.fuc3.h \
+    "$probe_dir/fuc/gf117_timer_probe.fuc3.h"
 python3 tools/test-gf117-pmu-optin.py
+GF117_NOUVEAU_SRC="$src/drivers/gpu/drm/nouveau" \
+    python3 tools/test-gf117-falcon-timer-provider.py
+GF117_NOUVEAU_SRC="$src/drivers/gpu/drm/nouveau" \
+    python3 tools/test-gf117-falcon-timer-patches.py
 for test in core ram vga crtc worker pll; do
     python3 "tools/test-gf117-$test-source.py" "$src"
 done
@@ -35,7 +51,9 @@ module="$src/drivers/gpu/drm/nouveau/nouveau.ko"
 [[ "$(modinfo -F vermagic "$module" | xargs)" == '7.2.9-2-cachyos SMP preempt mod_unload' ]]
 llvm-nm --defined-only "$module" > ci-output/nouveau.symbols
 grep -q 'gf117_pmu_new' ci-output/nouveau.symbols
+grep -q 'gf117_timer_probe_pmu_new' ci-output/nouveau.symbols
 grep -a -q 'NvGf117Pmu' "$module"
+grep -a -q 'NvGf117TimerProbe' "$module"
 python3 - "$module" <<'MANIFEST'
 import hashlib,json,os,subprocess,sys
 from pathlib import Path
@@ -57,7 +75,12 @@ manifest=dict(kernel='7.2.9-2-cachyos',commit=os.environ.get('GITHUB_SHA'),
                      'nvkm/subdev/fb/ramgf100.c')},
     patches={'consolidated':sha(root/'patches/nouveau/gf117-consolidated.patch'),
         'experimental_pmu':sha(root/'experimental/patches/0044-nouveau-gf117-pmu-fuc3-explicit-optin.patch'),
-        'ddr3_hard_block':sha(root/'experimental/patches/0045-nouveau-gf117-ddr3-hard-block.patch')})
+        'ddr3_hard_block':sha(root/'experimental/patches/0045-nouveau-gf117-ddr3-hard-block.patch'),
+        'falcon_timer_dispatch':sha(root/'experimental/patches/0046-nouveau-gf117-falcon-timer-probe-dispatch.patch')},
+    timer_probe_files={name:sha(root/'experimental/fermi/gf117-falcon-timer-probe'/name)
+        for name in ('gf117_timer_probe.fuc3','gf117_timer_probe.fuc3.h',
+                     'test.fuc','host.h','host.c','gf117_kernel.fuc',
+                     'gf117_idle.fuc','pmu_provider.c')})
 (root/'ci-output/manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print(json.dumps(manifest,indent=2))
 MANIFEST
