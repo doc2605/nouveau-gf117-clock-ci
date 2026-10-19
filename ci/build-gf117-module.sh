@@ -42,7 +42,10 @@ from pathlib import Path
 module=Path(sys.argv[1]);root=Path.cwd()
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 manifest=dict(kernel='7.2.9-2-cachyos',commit=os.environ.get('GITHUB_SHA'),
-    module_sha256=sha(module),source_sha256=sha(root/'work/source.tar.gz'),
+    schema='gf117-nouveau-module/v1',kernel_release='7.2.9-2-cachyos',
+    module_sha256=sha(module),
+    srcversion=subprocess.check_output(['modinfo','-F','srcversion',str(module)],text=True).strip(),
+    source_sha256=sha(root/'work/source.tar.gz'),
     headers_sha256=sha(root/'ci/kernel-7.2.9-2-headers.tar.zst'),
     config_sha256=sha(root/'work/build/.config'),
     symvers_sha256=sha(root/'work/build/Module.symvers'),
@@ -58,5 +61,7 @@ manifest=dict(kernel='7.2.9-2-cachyos',commit=os.environ.get('GITHUB_SHA'),
 (root/'ci-output/manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print(json.dumps(manifest,indent=2))
 MANIFEST
+python3 tools/test-verify-gf117-artifact.py
+python3 tools/verify-gf117-artifact.py ci-output/manifest.json "$module" 7.2.9-2-cachyos
 zstd -T0 -6 -o ci-output/nouveau.ko.zst "$module"
 sha256sum ci-output/nouveau.ko.zst > ci-output/nouveau.ko.zst.sha256
