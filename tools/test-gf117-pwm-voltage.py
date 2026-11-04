@@ -25,6 +25,8 @@ volt = (nouveau / "nvkm/subdev/volt/gf117.c")
 volt_text = volt.read_text()
 constructor = volt_text.split('\ngf117_volt_new(', 1)[1]
 assert 'volt->base.readback_is_estimate = true;' in constructor
+volt_base = (nouveau / "nvkm/subdev/volt/base.c").read_text()
+assert 'volt->readback_is_estimate = false;' in volt_base.split('\nnvkm_volt_ctor(', 1)[1]
 source = r'''
 #include <assert.h>
 #include <errno.h>

@@ -1,0 +1,16 @@
+From: Nouveau GF117 contributors
+Subject: [PATCH] nouveau: initialize voltage estimate metadata
+
+Initialize the new provenance flag for all Nouveau voltage backends, even
+when their enclosing object is not assumed to have been zero-filled.
+
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c
+@@ -335,6 +335,7 @@
+ 
+ 	nvkm_subdev_ctor(&nvkm_volt, device, type, inst, &volt->subdev);
+ 	volt->func = func;
++	volt->readback_is_estimate = false;
+ 
+ 	/* Assuming the non-bios device should build the voltage table later */
+ 	if (bios) {
