@@ -16,28 +16,44 @@ while depth:
     depth += (text[end] == '{') - (text[end] == '}')
     end += 1
 function = 'static int\n' + text[start:end]
+start = text.index('\nnouveau_input_is_visible(') + 1
+brace = text.index('{', start)
+end, depth = brace + 1, 1
+while depth:
+    depth += (text[end] == '{') - (text[end] == '}')
+    end += 1
+function = 'static umode_t\n' + text[start:end] + '\n' + function
 prelude = r'''
 #include <assert.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 typedef uint32_t u32;
-enum { hwmon_in_input, hwmon_in_min, hwmon_in_max, other_attr };
+typedef unsigned int umode_t;
+enum { hwmon_in_input, hwmon_in_min, hwmon_in_max, hwmon_in_label, other_attr };
 enum { DRM_SWITCH_POWER_ON = 1 };
-struct nvkm_volt { unsigned int min_uv, max_uv; int current_uv; };
+struct nvkm_volt { unsigned int min_uv, max_uv; int current_uv; bool readback_is_estimate; };
 struct nouveau_drm { struct nvkm_volt *volt; };
 struct drm_device { int switch_power_state; struct nouveau_drm driver; };
 struct device { struct drm_device *drm; };
 static struct drm_device *dev_get_drvdata(struct device *d) { return d->drm; }
 static struct nouveau_drm *nouveau_drm(struct drm_device *d) { return &d->driver; }
 static struct nvkm_volt *nvxx_volt(struct nouveau_drm *d) { return d->volt; }
-static int nvkm_volt_get(struct nvkm_volt *v) { return v->current_uv; }
+static int reads;
+static int nvkm_volt_get(struct nvkm_volt *v) { reads++; return v->current_uv; }
 '''
 tests = r'''
 int main(void) {
-    struct nvkm_volt volt = {650000, 1150000, 900000};
+    struct nvkm_volt volt = {650000, 1150000, 900000, false};
     struct drm_device drm = {DRM_SWITCH_POWER_ON, {&volt}};
     struct device dev = {&drm}; long value = 12345;
+    assert(nouveau_input_is_visible(&drm, hwmon_in_input, 0) == 0444);
+    int previous_reads = reads; volt.readback_is_estimate = true;
+    assert(nouveau_input_is_visible(&drm, hwmon_in_input, 0) == 0);
+    assert(nouveau_in_read(&dev, hwmon_in_input, 0, &value) == -EOPNOTSUPP);
+    assert(reads == previous_reads && value == 12345);
+    volt.readback_is_estimate = false;
     assert(nouveau_in_read(&dev, hwmon_in_input, 0, &value) == 0 && value == 900);
     volt.current_uv = -EIO; value = 12345;
     assert(nouveau_in_read(&dev, hwmon_in_input, 0, &value) == -EIO && value == 12345);

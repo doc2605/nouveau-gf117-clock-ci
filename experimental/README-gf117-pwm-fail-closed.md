@@ -24,3 +24,10 @@ negative numeric sensor value. The source-level mock test checks error paths,
 units, missing bounds, and power-off behavior. This change affects Nouveau
 voltage reporting on all chipsets; physical regression testing is not yet
 available. It does not convert a PWM-derived command into a physical reading.
+
+Patch 0048 marks the GF117 PWM-derived value as an estimate, hides it from
+hwmon's measured-voltage attributes, and rejects it in the GF117 voltage
+preflight before fan, voltage, or clock operations. Raw PWM diagnostics stay
+available. This does not prove GPIO VID readback measures a rail and does not
+validate any clock transition. The restriction is intentionally experimental
+until independent evidence exists.

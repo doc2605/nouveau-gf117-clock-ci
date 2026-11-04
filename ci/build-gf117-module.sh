@@ -25,6 +25,8 @@ patch --batch --fuzz=0 -d "$src" -p1 \
     -i "$repo/experimental/patches/0046-nouveau-gf117-pwm-fail-closed.patch"
 patch --batch --fuzz=0 -d "$src" -p1 \
     -i "$repo/experimental/patches/0047-nouveau-hwmon-voltage-errors.patch"
+patch --batch --fuzz=0 -d "$src" -p1 \
+    -i "$repo/experimental/patches/0048-nouveau-gf117-pwm-estimate-guard.patch"
 python3 tools/test-gf117-pmu-optin.py
 for test in core ram vga crtc worker pll; do
     python3 "tools/test-gf117-$test-source.py" "$src"
@@ -66,7 +68,8 @@ manifest=dict(kernel='7.2.9-2-cachyos',commit=os.environ.get('GITHUB_SHA'),
         'experimental_pmu':sha(root/'experimental/patches/0044-nouveau-gf117-pmu-fuc3-explicit-optin.patch'),
         'ddr3_hard_block':sha(root/'experimental/patches/0045-nouveau-gf117-ddr3-hard-block.patch'),
         'pwm_fail_closed':sha(root/'experimental/patches/0046-nouveau-gf117-pwm-fail-closed.patch'),
-        'hwmon_voltage_errors':sha(root/'experimental/patches/0047-nouveau-hwmon-voltage-errors.patch')})
+        'hwmon_voltage_errors':sha(root/'experimental/patches/0047-nouveau-hwmon-voltage-errors.patch'),
+        'pwm_estimate_guard':sha(root/'experimental/patches/0048-nouveau-gf117-pwm-estimate-guard.patch')})
 (root/'ci-output/manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print(json.dumps(manifest,indent=2))
 MANIFEST
