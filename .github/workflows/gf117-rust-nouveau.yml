@@ -1,0 +1,90 @@
+name: GF117 Rust inside Nouveau
+on:
+  push:
+    branches: ['research/gf117-rust-nouveau']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hybrid-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libelf-dev libssl-dev clang lld llvm libclang-dev python3 kmod zstd
+      - name: Prepare Rust tools
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal --component rust-src --component rustfmt
+          rustup default 1.85.0
+          cargo install --locked --version 0.71.1 bindgen-cli
+          rustc --version --verbose
+          bindgen --version
+          clang --version
+      - name: Restore pristine kernel source cache
+        id: kernel-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/linux-gf117
+          key: gf117-kernel-src-09bc889a111715e4509b3819b628c9b9d9d09a0b-v1
+      - name: Fetch and verify pinned kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          kernel="$RUNNER_TEMP/linux-gf117"
+          if [[ ! -d "$kernel/.git" ]]; then
+            git clone --depth 1 --branch cachyos-7.2.9-2 https://github.com/CachyOS/linux.git "$kernel"
+          fi
+          test "$(git -C "$kernel" rev-parse HEAD)" = 09bc889a111715e4509b3819b628c9b9d9d09a0b
+          test -z "$(git -C "$kernel" status --porcelain)"
+      - name: Save pristine kernel source
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/linux-gf117
+          key: gf117-kernel-src-09bc889a111715e4509b3819b628c9b9d9d09a0b-v1
+      - name: Patch and test both implementations
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-output
+          kernel="$RUNNER_TEMP/linux-gf117"
+          for p in patches/nouveau/[0-9]*.patch; do patch --batch --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/$p"; done
+          patch --batch --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/experimental/rust-nouveau/0001-gf117-rust-command-guard.patch"
+          bash experimental/rust-poc/test-host.sh "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_rust_guard.rs"
+          rustc --edition=2021 --crate-type=lib --emit=obj -C panic=abort "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_rust_guard.rs" -o "$RUNNER_TEMP/gf117-guard.o"
+          python3 tools/test-gf117-core-source.py "$kernel"
+          GF117_TEST_RUST_OBJECT="$RUNNER_TEMP/gf117-guard.o" python3 tools/test-gf117-core-source.py "$kernel"
+      - name: Configure and build Nouveau with Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          kernel="$RUNNER_TEMP/linux-gf117"
+          make -C "$kernel" LLVM=1 rustavailable
+          make -C "$kernel" LLVM=1 defconfig
+          "$kernel/scripts/config" --file "$kernel/.config" -e MODULES -e RUST -m DRM_NOUVEAU -e DRM_NOUVEAU_GF117_RUST_GUARD -d MODVERSIONS -d DEBUG_INFO_BTF -d LTO_CLANG
+          make -C "$kernel" LLVM=1 olddefconfig
+          grep -qx 'CONFIG_RUST=y' "$kernel/.config"
+          grep -qx 'CONFIG_DRM_NOUVEAU=m' "$kernel/.config"
+          grep -qx 'CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD=y' "$kernel/.config"
+          make -C "$kernel" LLVM=1 -j"$(nproc)" vmlinux modules 2>&1 | tee ci-output/kernel-build.log
+          module="$kernel/drivers/gpu/drm/nouveau/nouveau.ko"
+          test -s "$module"
+          nm "$module" > ci-output/nouveau.symbols
+          nm -u "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/base.o" > ci-output/clock-undefined.symbols
+          grep -E ' [Tt] gf117_rust_validate_command$' ci-output/nouveau.symbols
+          grep -E ' U gf117_rust_validate_command$' ci-output/clock-undefined.symbols
+          cp "$kernel/.config" ci-output/kernel.config
+          sha256sum "$module" ci-output/kernel.config > ci-output/SHA256SUMS
+          { printf 'project_commit=%s\nkernel_source_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$kernel" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; modinfo -F vermagic "$module"; sha256sum patches/nouveau/[0-9]*.patch experimental/rust-nouveau/0001-gf117-rust-command-guard.patch; } > ci-output/build-info.txt
+          zstd -T0 -6 -o ci-output/nouveau-rust.ko.zst "$module"
+      - name: Upload logs and experimental artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gf117-rust-nouveau-${{ github.sha }}
+          path: ci-output/
+          if-no-files-found: warn
+          retention-days: 14

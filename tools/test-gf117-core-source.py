@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise actual core/voltage and PLL stage functions with mock hardware."""
 import argparse
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -170,12 +171,16 @@ int main(void) {
 '''
 volt_text=(a.source/'drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c').read_text()
 vstart=volt_text.index('\nnvkm_volt_preflight(')+1;vend=volt_text.index('\n}',vstart)+2
+rust_object = os.environ.get('GF117_TEST_RUST_OBJECT')
+if rust_object:
+    common += 'extern int gf117_rust_validate_command(int, int, int);\n'
 common+='int\n'+volt_text[vstart:vend]+'\n'
 voltage = common+function('base.c','nvkm_clk_fermi_core_only','bool')+function('base.c','nvkm_cstate_prog')+voltage_tests
 pll = pll_prelude+function('gf100.c','read_pll','u32')+''.join(function('gf100.c','gf100_clk_prog_'+str(i)) for i in range(5))+function('gf100.c','gf100_clk_prog')+pll_tests
 with tempfile.TemporaryDirectory(prefix='gf117-core-test-') as d:
     for name,source in [('voltage',voltage),('pll',pll)]:
         c=Path(d)/(name+'.c');exe=Path(d)/name;c.write_text(source)
+        flags = ['-DCONFIG_DRM_NOUVEAU_GF117_RUST_GUARD', rust_object] if name == 'voltage' and rust_object else []
         subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fsanitize=undefined',
-                        '-fno-sanitize-recover=all',str(c),'-o',str(exe)],check=True)
+                        '-fno-sanitize-recover=all',str(c),*flags,'-o',str(exe)],check=True)
         subprocess.run([str(exe)],check=True)
