@@ -1,7 +1,7 @@
 # Experimental Rust guard inside Nouveau
 
 After patches 0001–0022 on CachyOS Linux commit
-`09bc889a111715e4509b3819b628c9b9d9d09a0b`, the safety patches 0046–0049 suppress voltage estimates as hwmon measurements
+`09bc889a111715e4509b3819b628c9b9d9d09a0b`, the safety patches 0047–0049 suppress voltage estimates as hwmon measurements
 and block the GF117 voltage preflight when PWM readback is only an estimate.
 The Rust patch introduces
 `CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD` (default off; requires Rust and Nouveau).
