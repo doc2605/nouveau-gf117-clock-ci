@@ -11,6 +11,14 @@ ver=0.1.0
 release=7.2.9-2-cachyos
 [[ ! -e "$base" ]] || { echo "refusing existing DKMS sandbox: $base" >&2; exit 2; }
 mkdir -p "$base/src/$pkg-$ver" "$base/state" "$base/install" "$base/tmp"
+save_build_log() {
+    local log
+    for log in "$base/state/$pkg/$ver/build/make.log" \
+               "$base/state/$pkg/$ver/$release/$(uname -m)/log/make.log"; do
+        if [[ -f "$log" ]]; then cp "$log" "$repo/ci-output/dkms-make.log"; break; fi
+    done
+}
+trap save_build_log EXIT
 cp -a "$source_root/drivers/gpu/drm/nouveau" "$base/src/$pkg-$ver/nouveau"
 cp "$repo/experimental/dkms/dkms.conf" "$repo/experimental/dkms/build-module.sh" "$base/src/$pkg-$ver/"
 args=(--sourcetree "$base/src" --dkmstree "$base/state" --installtree "$base/install" --kernelsourcedir "$kbuild")
@@ -22,4 +30,3 @@ module="$base/state/$pkg/$ver/$release/$(uname -m)/module/nouveau.ko"
 modinfo -F vermagic "$module"
 sha256sum "$module" > "$repo/ci-output/dkms-nouveau.ko.sha256"
 zstd -T0 -6 -o "$repo/ci-output/dkms-nouveau.ko.zst" "$module"
-cp "$base/state/$pkg/$ver/$release/$(uname -m)/log/make.log" "$repo/ci-output/dkms-make.log"

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Experimental DKMS build entrypoint: no installation or system changes.
 set -euo pipefail
-[[ $# == 2 ]] || { echo 'expected kernel build directory and release' >&2; exit 2; }
+[[ $# == 2 || ( $# == 3 && $3 == LLVM=1 ) ]] || {
+    echo 'expected kernel build directory, release, and optional LLVM=1' >&2; exit 2;
+}
 kbuild=$1
 release=$2
 [[ "$release" == 7.2.9-2-cachyos ]] || { echo "unsupported kernel: $release" >&2; exit 2; }

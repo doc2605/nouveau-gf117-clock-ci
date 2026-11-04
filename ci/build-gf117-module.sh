@@ -31,6 +31,7 @@ python3 tools/test-gf117-pwm-probe.py "$src"
 python3 tools/test-gf117-pwm-voltage.py "$src"
 python3 tools/test-gf117-core-helper.py
 bash -n tools/test-gf117-core-once.sh
+python3 experimental/dkms/test-build-entry.py
 bash experimental/dkms/ci-build-only.sh "$src" "$repo/work/build"
 make -C "$repo/work/build" LLVM=1 LLVM_IAS=1 -j"$(nproc)" \
     M="$src/drivers/gpu/drm/nouveau" modules
