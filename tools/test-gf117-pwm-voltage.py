@@ -24,6 +24,8 @@ gf119 = (nouveau / "nvkm/subdev/therm/gf119.c")
 volt = (nouveau / "nvkm/subdev/volt/gf117.c")
 volt_source = volt.read_text()
 assert 'volt->base.readback_is_estimate = true;' in volt_source.split('\ngf117_volt_new(', 1)[1]
+volt_base = (nouveau / "nvkm/subdev/volt/base.c").read_text()
+assert 'volt->readback_is_estimate = false;' in volt_base.split('\nnvkm_volt_ctor(', 1)[1]
 pwm_ops = volt_source.split('static const struct nvkm_volt_func gf117_volt_pwm = {', 1)[1].split('};', 1)[0]
 assert '.volt_get = gf117_volt_pwm_get' in pwm_ops
 assert '.volt_set' not in pwm_ops and '.vid_set' not in pwm_ops
