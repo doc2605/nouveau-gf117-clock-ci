@@ -28,7 +28,7 @@ typedef uint8_t u8;typedef uint32_t u32;
 #define min(a,b) ((a)<(b)?(a):(b))
 #define ARRAY_SIZE(a) (int)(sizeof(a)/sizeof((a)[0]))
 #include <limits.h>
-struct nvkm_volt { int uv,target,set_error; bool unreadable,stuck; u32 max_uv; u8 max0_id,max1_id,max2_id,vid_nr;struct {u32 uv;} vid[4]; };
+struct nvkm_volt { int uv,target,set_error; bool unreadable,stuck,readback_is_estimate; u32 max_uv; u8 max0_id,max1_id,max2_id,vid_nr;struct {u32 uv;} vid[4]; };
 struct nvkm_therm { int unused; };
 struct nvkm_clk;
 struct nvkm_cstate { int voltage; };
@@ -77,6 +77,11 @@ int main(void) {
  struct nvkm_pstate state={.base={.voltage=17}};
  assert(nvkm_cstate_prog(&clk,&state,0)==0 && prog_calls==1);
  assert(volt.uv==900000 && volt_lower==0 && fan_lower==0 && boost_queries==0);
+ volt.readback_is_estimate=true;
+ int estimate_calc=calc_calls, estimate_prog=prog_calls, estimate_fan=fan_raise, estimate_volt=volt_raise;
+ assert(nvkm_cstate_prog(&clk,&state,0)==-EOPNOTSUPP);
+ assert(calc_calls==estimate_calc && prog_calls==estimate_prog && fan_raise==estimate_fan && volt_raise==estimate_volt);
+ volt.readback_is_estimate=false;
  volt.target=1000000;
  assert(nvkm_cstate_prog(&clk,&state,0)==0 && volt.uv==1000000);
  int before=calc_calls;volt.unreadable=true;

@@ -9,6 +9,10 @@ preserved; the experimental preflight and core-only path are inserted after
 it. Patch order is mandatory.
 The additional 0047 patch propagates generic hwmon voltage read errors;
 it does not validate the accuracy of PWM-derived command estimates.
+Patch 0048 keeps the GF117 PWM-derived estimate out of measured-voltage
+hwmon reporting and rejects it as a core-clock preflight input. The raw
+read-only PWM diagnostics remain available. This is a conservative guard,
+not a validation of voltage behavior or a permanent feature decision.
 
 `apply-and-test.sh <clean-kernel-git-checkout>` checks the exact commit and
 rejects a dirty Nouveau tree, copies Nouveau to a temporary directory, applies

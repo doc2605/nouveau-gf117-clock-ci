@@ -22,6 +22,9 @@ def function(path, name, result_type="int"):
 base = (nouveau / "nvkm/subdev/therm/base.c")
 gf119 = (nouveau / "nvkm/subdev/therm/gf119.c")
 volt = (nouveau / "nvkm/subdev/volt/gf117.c")
+volt_text = volt.read_text()
+constructor = volt_text.split('\ngf117_volt_new(', 1)[1]
+assert 'volt->base.readback_is_estimate = true;' in constructor
 source = r'''
 #include <assert.h>
 #include <errno.h>
