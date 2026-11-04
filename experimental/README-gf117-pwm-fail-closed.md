@@ -17,3 +17,10 @@ separate and unvalidated.
 with mocks, including a setter-present unreadable case; `test-gf117-pwm-voltage.py`
 checks that the actual PWM backend has no setter and tests readback with mocks.
 CI builds the resulting module but does not load it or exercise real hardware.
+
+Patch 0047 fixes the generic Nouveau hwmon voltage callback: a failed read or
+missing minimum/maximum is returned as an error rather than reported as a
+negative numeric sensor value. The source-level mock test checks error paths,
+units, missing bounds, and power-off behavior. This change affects Nouveau
+voltage reporting on all chipsets; physical regression testing is not yet
+available. It does not convert a PWM-derived command into a physical reading.
