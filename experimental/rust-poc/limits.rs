@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Pure validation prototype. Values are commands in microvolts, not measurements.
-#![no_std]
+#![cfg_attr(not(CONFIG_RUST), no_std)]
 
 /// Validate an already observed voltage command before a hypothetical transition.
 /// Returns 0 for an acceptable command, -1 for unknown, -2 for invalid bounds,
