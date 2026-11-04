@@ -17,3 +17,12 @@ patch applicability and mock behavior only; review, exact-ABI build, safety
 analysis and physical tests with authorization remain necessary. The old
 numbered branch's experimental clock and voltage restrictions remain in force;
 this port does not incorporate the separate PMU branch or its safety patch.
+
+An optional second argument selects a new output directory outside the kernel
+checkout, used by the build-only CI. The CI downloads the archived x86_64-v3
+`linux-cachyos-headers-7.3.0-4` package, pinned by SHA-256. Its signature was
+independently checked against the local CachyOS keyring before pinning (key
+fingerprint `882DCFE48E2051D48E2562ABF3B607488DB35A47`). The LLVM release
+archive is also pinned by SHA-256. CI results, warnings and artifact manifest
+must be inspected; the presence of this workflow does not prove a successful
+build or allow installing the output.

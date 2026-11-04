@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # Source-only compatibility check; this does not build or load a module.
 set -euo pipefail
-[[ $# == 1 ]] || { echo 'usage: apply-and-test.sh <clean pinned kernel git checkout>' >&2; exit 2; }
+[[ $# == 1 || $# == 2 ]] || { echo 'usage: apply-and-test.sh <clean pinned kernel git checkout> [new output directory]' >&2; exit 2; }
 source_root=$(realpath "$1")
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 expected=6f1d90319ee9a72139f60d4547c2b44064ee2987
 [[ "$(git -C "$source_root" rev-parse HEAD)" == "$expected" ]] || { echo 'kernel commit mismatch' >&2; exit 2; }
 [[ -z "$(git -C "$source_root" status --porcelain --untracked-files=all -- drivers/gpu/drm/nouveau)" ]] || { echo 'Nouveau source is dirty' >&2; exit 2; }
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+if [[ $# == 2 ]]; then
+    [[ ! -e "$2" ]] || { echo 'output directory already exists' >&2; exit 2; }
+    work=$(realpath -m "$2")
+    case "$work/" in "$source_root"/*) echo 'output must be outside the kernel checkout' >&2; exit 2;; esac
+    mkdir -p "$work"
+else
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+fi
 mkdir -p "$work/drivers/gpu/drm"
 cp -a "$source_root/drivers/gpu/drm/nouveau" "$work/drivers/gpu/drm/nouveau"
 for original in "$repo"/patches/nouveau/[0-9]*.patch; do
