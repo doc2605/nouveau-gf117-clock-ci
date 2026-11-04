@@ -1,0 +1,31 @@
+From: Nouveau GF117 contributors
+Subject: [PATCH] nouveau: propagate hwmon voltage read errors
+
+Report failed voltage reads and unavailable bounds as errors rather than
+negative sensor values. This does not establish voltage measurement accuracy.
+
+--- a/drivers/gpu/drm/nouveau/nouveau_hwmon.c
++++ b/drivers/gpu/drm/nouveau/nouveau_hwmon.c
+@@ -450,13 +450,19 @@
+ 		if (drm_dev->switch_power_state != DRM_SWITCH_POWER_ON)
+ 			return -EINVAL;
+ 		ret = nvkm_volt_get(volt);
+-		*val = ret < 0 ? ret : (ret / 1000);
++		if (ret < 0)
++			return ret;
++		*val = ret / 1000;
+ 		break;
+ 	case hwmon_in_min:
+-		*val = volt->min_uv > 0 ? (volt->min_uv / 1000) : -ENODEV;
++		if (!volt->min_uv)
++			return -ENODEV;
++		*val = volt->min_uv / 1000;
+ 		break;
+ 	case hwmon_in_max:
+-		*val = volt->max_uv > 0 ? (volt->max_uv / 1000) : -ENODEV;
++		if (!volt->max_uv)
++			return -ENODEV;
++		*val = volt->max_uv / 1000;
+ 		break;
+ 	default:
+ 		return -EOPNOTSUPP;

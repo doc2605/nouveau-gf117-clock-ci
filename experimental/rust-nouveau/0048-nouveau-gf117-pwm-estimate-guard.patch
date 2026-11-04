@@ -1,0 +1,60 @@
+From: Nouveau GF117 contributors
+Subject: [PATCH] nouveau: keep GF117 PWM estimate out of voltage safety decisions
+
+A VBIOS-derived PWM command is not an independent rail measurement. Keep
+raw diagnostics, but do not publish the estimate as measured hwmon voltage
+or use it to authorize an experimental clock transition.
+
+--- a/drivers/gpu/drm/nouveau/include/nvkm/subdev/volt.h
++++ b/drivers/gpu/drm/nouveau/include/nvkm/subdev/volt.h
+@@ -16,6 +16,9 @@
+ 
+ 	u32 max_uv;
+ 	u32 min_uv;
++
++	/* A command-derived estimate is not an independently measured voltage. */
++	bool readback_is_estimate;
+ 
+ 	/*
+ 	 * These are fully functional map entries creating a sw ceiling for
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c
+@@ -171,6 +171,8 @@
+ 	*limit_uv = 0;
+ 	if (!volt)
+ 		return -ENODEV;
++	if (volt->readback_is_estimate)
++		return -EOPNOTSUPP;
+ 	*current_uv = nvkm_volt_get(volt);
+ 	if (*current_uv <= 0)
+ 		return *current_uv ? *current_uv : -ERANGE;
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/volt/gf117.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/volt/gf117.c
+@@ -129,6 +129,7 @@
+ 	if (pwm) {
+ 		volt->bios = bios;
+ 		volt->pwm_line = gpio.line;
++		volt->base.readback_is_estimate = true;
+ 	} else {
+ 		ret = nvkm_voltgpio_init(&volt->base);
+ 	}
+--- a/drivers/gpu/drm/nouveau/nouveau_hwmon.c
++++ b/drivers/gpu/drm/nouveau/nouveau_hwmon.c
+@@ -317,7 +317,7 @@
+ 	struct nouveau_drm *drm = nouveau_drm((struct drm_device *)data);
+ 	struct nvkm_volt *volt = nvxx_volt(drm);
+ 
+-	if (!volt || nvkm_volt_get(volt) < 0)
++	if (!volt || volt->readback_is_estimate || nvkm_volt_get(volt) < 0)
+ 		return 0;
+ 
+ 	switch (attr) {
+@@ -442,7 +442,7 @@
+ 	struct nvkm_volt *volt = nvxx_volt(drm);
+ 	int ret;
+ 
+-	if (!volt)
++	if (!volt || volt->readback_is_estimate)
+ 		return -EOPNOTSUPP;
+ 
+ 	switch (attr) {

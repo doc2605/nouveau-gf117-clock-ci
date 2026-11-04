@@ -52,9 +52,12 @@ jobs:
           mkdir -p ci-output
           kernel="$RUNNER_TEMP/linux-gf117"
           for p in patches/nouveau/[0-9]*.patch; do patch --batch --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/$p"; done
+          for p in experimental/rust-nouveau/004[6789]-*.patch; do patch --batch --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/$p"; done
           patch --batch --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/experimental/rust-nouveau/0001-gf117-rust-command-guard.patch"
           bash experimental/rust-poc/test-host.sh "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_rust_guard.rs"
           rustc --edition=2021 --crate-type=lib --emit=obj -C panic=abort "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_rust_guard.rs" -o "$RUNNER_TEMP/gf117-guard.o"
+          python3 tools/test-gf117-pwm-voltage.py "$kernel"
+          python3 tools/test-gf117-hwmon-voltage.py "$kernel"
           python3 tools/test-gf117-core-source.py "$kernel"
           GF117_TEST_RUST_OBJECT="$RUNNER_TEMP/gf117-guard.o" python3 tools/test-gf117-core-source.py "$kernel"
       - name: Configure and build Nouveau with Rust
@@ -78,7 +81,7 @@ jobs:
           grep -E ' U gf117_rust_validate_command$' ci-output/clock-undefined.symbols
           cp "$kernel/.config" ci-output/kernel.config
           sha256sum "$module" ci-output/kernel.config > ci-output/SHA256SUMS
-          { printf 'project_commit=%s\nkernel_source_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$kernel" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; modinfo -F vermagic "$module"; sha256sum patches/nouveau/[0-9]*.patch experimental/rust-nouveau/0001-gf117-rust-command-guard.patch; } > ci-output/build-info.txt
+          { printf 'project_commit=%s\nkernel_source_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$kernel" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; modinfo -F vermagic "$module"; sha256sum patches/nouveau/[0-9]*.patch experimental/rust-nouveau/0001-gf117-rust-command-guard.patch experimental/rust-nouveau/004[6789]-*.patch; } > ci-output/build-info.txt
           zstd -T0 -6 -o ci-output/nouveau-rust.ko.zst "$module"
       - name: Upload logs and experimental artifact
         if: always()
