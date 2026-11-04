@@ -16,7 +16,7 @@ jobs:
           echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main" > /etc/apt/sources.list.d/jammy-compat.list
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bc bison build-essential ca-certificates curl dwarves flex git kmod libedit2 \
+            bc bison build-essential ca-certificates curl dkms dwarves flex git kmod libedit2 \
             libelf-dev libicu70 libncurses6 libssl-dev libtinfo6 libxml2 \
             libsframe3 libxxhash0 \
             libz3-4 python3 ripgrep zstd
