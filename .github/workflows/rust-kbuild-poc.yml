@@ -1,0 +1,60 @@
+name: GF117 Rust Kbuild proof
+on:
+  push:
+    branches: ['research/rust-kbuild-poc']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libelf-dev libssl-dev clang lld llvm libclang-dev python3 zstd
+      - name: Install pinned Rust tools
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal --component rust-src
+          rustup default 1.85.0
+          cargo install --locked --version 0.71.1 bindgen-cli
+          rustc --version --verbose
+          bindgen --version
+          clang --version
+      - name: Test C and Rust logic on host
+        run: bash experimental/rust-poc/test-host.sh
+      - name: Fetch and configure isolated kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch cachyos-7.2.9-2 https://github.com/CachyOS/linux.git "$RUNNER_TEMP/linux"
+          test "$(git -C "$RUNNER_TEMP/linux" rev-parse HEAD)" = 09bc889a111715e4509b3819b628c9b9d9d09a0b
+          make -C "$RUNNER_TEMP/linux" LLVM=1 rustavailable
+          make -C "$RUNNER_TEMP/linux" LLVM=1 defconfig
+          "$RUNNER_TEMP/linux/scripts/config" --file "$RUNNER_TEMP/linux/.config" -e MODULES -e RUST -d MODVERSIONS -d DEBUG_INFO_BTF -d LTO_CLANG
+          make -C "$RUNNER_TEMP/linux" LLVM=1 olddefconfig
+          grep -qx 'CONFIG_RUST=y' "$RUNNER_TEMP/linux/.config"
+          grep -qx 'CONFIG_MODULES=y' "$RUNNER_TEMP/linux/.config"
+      - name: Build kernel and external hybrid module
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-output
+          make -C "$RUNNER_TEMP/linux" LLVM=1 -j"$(nproc)" 2>&1 | tee ci-output/kernel-build.log
+          make -C "$RUNNER_TEMP/linux" LLVM=1 M="$GITHUB_WORKSPACE/experimental/rust-poc" modules 2>&1 | tee ci-output/module-build.log
+          test -s experimental/rust-poc/gf117_rust_poc.ko
+          nm experimental/rust-poc/gf117_rust_poc.ko | grep 'gf117_rust_validate_command'
+          cp experimental/rust-poc/gf117_rust_poc.ko ci-output/
+          cp "$RUNNER_TEMP/linux/.config" ci-output/kernel.config
+          { printf 'project_commit=%s\nkernel_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$RUNNER_TEMP/linux" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; } > ci-output/build-info.txt
+          sha256sum ci-output/gf117_rust_poc.ko ci-output/kernel.config > ci-output/SHA256SUMS
+      - name: Upload logs and build artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rust-kbuild-poc-${{ github.sha }}
+          path: ci-output/
+          if-no-files-found: warn
+          retention-days: 14
