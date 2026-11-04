@@ -26,8 +26,12 @@ for original in "$repo"/patches/nouveau/[0-9]*.patch; do
     sha256sum "$selected"
     patch --batch --fuzz=0 -d "$work" -p1 -i "$selected"
 done
+extra="$repo/experimental/cachyos-7.3.0-4/extra/0047-nouveau-hwmon-voltage-errors.patch"
+sha256sum "$extra"
+patch --batch --fuzz=0 -d "$work" -p1 -i "$extra"
 for test in core ram vga crtc worker pll; do
     python3 "$repo/tools/test-gf117-$test-source.py" "$work"
 done
 python3 "$repo/tools/test-gf117-pwm-probe.py" "$work"
 python3 "$repo/tools/test-gf117-pwm-voltage.py" "$work"
+python3 "$repo/tools/test-gf117-hwmon-voltage.py" "$work"

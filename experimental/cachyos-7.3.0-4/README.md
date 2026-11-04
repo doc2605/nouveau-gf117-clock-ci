@@ -7,6 +7,8 @@ pstate lookup changes at CachyOS Linux commit
 of the numbered 0001–0022 series. The original pstate `found` check is
 preserved; the experimental preflight and core-only path are inserted after
 it. Patch order is mandatory.
+The additional 0047 patch propagates generic hwmon voltage read errors;
+it does not validate the accuracy of PWM-derived command estimates.
 
 `apply-and-test.sh <clean-kernel-git-checkout>` checks the exact commit and
 rejects a dirty Nouveau tree, copies Nouveau to a temporary directory, applies
