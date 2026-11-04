@@ -22,6 +22,11 @@ def function(path, name, result_type="int"):
 base = (nouveau / "nvkm/subdev/therm/base.c")
 gf119 = (nouveau / "nvkm/subdev/therm/gf119.c")
 volt = (nouveau / "nvkm/subdev/volt/gf117.c")
+volt_source = volt.read_text()
+pwm_ops = volt_source.split('static const struct nvkm_volt_func gf117_volt_pwm = {', 1)[1].split('};', 1)[0]
+assert '.volt_get = gf117_volt_pwm_get' in pwm_ops
+assert '.volt_set' not in pwm_ops and '.vid_set' not in pwm_ops
+assert 'gf117_volt_pwm_set(' not in volt_source
 source = r'''
 #include <assert.h>
 #include <errno.h>

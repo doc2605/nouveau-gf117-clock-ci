@@ -93,6 +93,10 @@ int main(void) {
  assert(nvkm_cstate_prog(&clk,&state,0)==0 && volt.uv==1000000);
  int before=calc_calls;volt.unreadable=true;volt.func=&no_set_ops;
  assert(nvkm_cstate_prog(&clk,&state,0)==-ENODEV && calc_calls==before);
+ int before_raise=volt_raise, before_fan=fan_raise, before_prog=prog_calls;
+ volt.func=&volt_ops;
+ assert(nvkm_cstate_prog(&clk,&state,0)==-ENODEV);
+ assert(calc_calls==before && prog_calls==before_prog && volt_raise==before_raise && fan_raise==before_fan);
  volt.unreadable=false;volt.func=&volt_ops;
  dev.volt=NULL;
  assert(nvkm_cstate_prog(&clk,&state,0)==-ENODEV && calc_calls==before);dev.volt=&volt;
