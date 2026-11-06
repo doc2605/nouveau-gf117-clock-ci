@@ -1,9 +1,19 @@
-# Prova de conceito C + Rust para validação GF117
+# C + Rust kernel integration probes
 
-Estado: **protótipo de integração, não integrante do Nouveau e não validado no kernel**. O componente `limits.rs` é `no_std`, sem alocação, MMIO, ponteiros ou blocos `unsafe`; recebe apenas inteiros e devolve um código. `glue.c` o chama a partir de um módulo Kbuild composto. Esse módulo não manipula hardware. Não instalar nem carregar o módulo para esta investigação.
+`limits.rs`, `glue.c`, and the external-module `Makefile` are a standalone
+Kbuild/toolchain probe. The module is not Nouveau and its glue does not touch
+hardware. `test-host.sh` compiles the Rust validator to an object, links it to
+C, and compares C and Rust behavior across 1,728 boundary combinations. It
+uses temporary files and does not require Cargo.
 
-`./test-host.sh` compila Rust em objeto, liga com C e compara uma implementação C de referência em 1.728 combinações de limites. Esse teste verifica ABI e lógica no host, não a compilação ou execução no kernel. O teste usa arquivos temporários e não requer Cargo.
+The in-tree Nouveau proof of concept is separate and lives under
+`experimental/rust-nouveau/`. That patch compiles Rust into `nouveau.ko` and
+calls it from the read-only GF117 `pstate_plan` diagnostic. The standalone
+probe must not be used as evidence that the Nouveau C caller is reachable or
+that any module works on hardware.
 
-Quando houver uma árvore/configuração de kernel apropriada, o comando de build remoto a validar é `make -C "$KDIR" M="$PWD" modules`. O Makefile é uma hipótese de integração baseada nas regras Kbuild da tag CachyOS `cachyos-7.2.9-2`, ainda **não verificada com Kbuild**. Antes de executá-lo é preciso verificar `CONFIG_RUST=y`, artefatos Rust preparados, `Module.symvers` quando necessário, toolchain compatível e o resultado de `make rustavailable` na mesma árvore. Não usar `modules_install`. A integração real ao Nouveau deve acrescentar o objeto Rust ao `nouveau-y` apenas em configuração experimental apropriada e chamar o validador no caminho de produção, com fallback C definido e testes de equivalência. Nada disso está demonstrado ainda.
-
-A função não determina se uma tensão física é segura. Não usar seu resultado para programar clock, PWM ou tensão sem validar independentemente as entradas e o comportamento do hardware. Limites aqui são apenas parâmetros de teste, não limites do GF117.
+Kernel build integration is performed in CI against a pinned full CachyOS
+source tree. The CI checks `rustavailable`, the Rust and bindgen versions,
+Kconfig, C/Rust linkage, extended MODVERSIONS, and a full kernel/module build.
+No module is installed or loaded. The local probe remains optional and should
+not add a Rust toolchain requirement to normal development or DKMS builds.

@@ -1,0 +1,98 @@
+From: Nouveau GF117 contributors
+Subject: [PATCH] nouveau: add Rust validation to GF117 voltage-plan diagnostics
+
+Use a scalar-only Rust validator from Nouveau's read-only pstate_plan debugfs
+diagnostic. The values are derived from the VBIOS plan, not measured rail
+voltage; the validator never authorizes a clock or voltage change.
+
+--- a/drivers/gpu/drm/nouveau/Kconfig
++++ b/drivers/gpu/drm/nouveau/Kconfig
+@@ -31,6 +31,15 @@
+ 	select PM_DEVFREQ if ARCH_TEGRA
+ 	help
+ 	  Choose this option for open-source NVIDIA support.
++
++config DRM_NOUVEAU_GF117_RUST_GUARD
++	bool "Experimental Rust GF117 voltage-plan diagnostic"
++	depends on DRM_NOUVEAU && RUST
++	default n
++	help
++	  Validate VBIOS voltage-plan values from Nouveau's read-only pstate_plan
++	  debugfs diagnostic. This does not measure physical voltage or authorize
++	  clock changes. This option is experimental and not hardware-validated.
+ 
+ config NOUVEAU_PLATFORM_DRIVER
+ 	bool "Nouveau (NVIDIA) SoC GPUs"
+--- a/drivers/gpu/drm/nouveau/Kbuild
++++ b/drivers/gpu/drm/nouveau/Kbuild
+@@ -14,6 +14,7 @@
+ #- code also used by various userspace tools/tests
+ include $(src)/nvkm/Kbuild
+ nouveau-y += $(nvkm-y)
++nouveau-$(CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD) += nvkm/subdev/clk/gf117_rust_guard.o
+ 
+ # DRM - general
+ ifdef CONFIG_X86
+--- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c
++++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+@@ -180,6 +180,23 @@
+ 	.release = single_release,
+ };
+ 
++#ifdef CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD
++/* Pure scalar validation for the GF117 read-only VBIOS plan diagnostic. */
++extern int gf117_rust_validate_voltage_range(int target_uv, int min_uv, int max_uv);
++
++static int
++nouveau_debugfs_validate_voltage_plan(struct nvkm_clk *clk,
++				     struct nvkm_cstate *cstate)
++{
++	struct nvkm_volt *volt = clk->subdev.device->volt;
++	int target_uv = volt ? nvkm_volt_map(volt, cstate->voltage, clk->temp) : 0;
++
++	return gf117_rust_validate_voltage_range(target_uv,
++						 volt ? (int)volt->min_uv : 0,
++						 volt ? (int)volt->max_uv : 0);
++}
++#endif
++
+ static int
+ nouveau_debugfs_pstate_plan_get(struct seq_file *m, void *data)
+ {
+@@ -210,6 +228,12 @@
+ 			seq_printf(m, "state=%d dryrun_error=%d\n", state, ret);
+ 			continue;
+ 		}
++#ifdef CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD
++		if (clk->subdev.device->chipset == 0xd7) {
++			int check = nouveau_debugfs_validate_voltage_plan(clk, &cstate);
++			seq_printf(m, "state=%d rust_voltage_plan_check=%d\n", state, check);
++		}
++#endif
+ 
+ 		ram_ret = fb && fb->ram ? nvkm_ram_dryrun(fb->ram, requested_memory,
+ 							 &ram) : -ENODEV;
+--- /dev/null
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_rust_guard.rs
+@@ -0,0 +1,21 @@
++// SPDX-License-Identifier: MIT
++//! Pure scalar validation used by the read-only GF117 pstate_plan diagnostic.
++#![cfg_attr(not(CONFIG_RUST), no_std)]
++
++/// Validate a VBIOS-derived voltage target against the VBIOS interval.
++/// This validates a plan only; it does not measure a rail or change voltage.
++/// Returns 0 for an acceptable target, -1 for an unknown target, -2 for invalid
++/// bounds, and -3 when the target falls outside the permitted interval.
++#[no_mangle]
++pub extern "C" fn gf117_rust_validate_voltage_range(target_uv: i32, min_uv: i32, max_uv: i32) -> i32 {
++    if target_uv <= 0 {
++        return -1;
++    }
++    if min_uv <= 0 || max_uv <= 0 || min_uv > max_uv {
++        return -2;
++    }
++    if target_uv < min_uv || target_uv > max_uv {
++        return -3;
++    }
++    0
++}

@@ -4,11 +4,11 @@
 #include <linux/init.h>
 #include <linux/module.h>
 
-extern int gf117_rust_validate_command(int current_uv, int required_uv, int ceiling_uv);
+extern int gf117_rust_validate_voltage_range(int target_uv, int min_uv, int max_uv);
 
 static int __init gf117_rust_poc_init(void)
 {
-	return gf117_rust_validate_command(900000, 850000, 1000000) ? -EINVAL : 0;
+	return gf117_rust_validate_voltage_range(900000, 850000, 1000000) ? -EINVAL : 0;
 }
 
 static void __exit gf117_rust_poc_exit(void) { }

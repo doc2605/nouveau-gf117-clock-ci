@@ -1,36 +1,40 @@
-# Experimental Rust guard inside Nouveau
+# Experimental Rust diagnostic inside Nouveau
 
-After patches 0001–0022 on CachyOS Linux commit
-`09bc889a111715e4509b3819b628c9b9d9d09a0b`, the safety patches 0047–0049 suppress voltage estimates as hwmon measurements
-and block the GF117 voltage preflight when PWM readback is only an estimate.
-Patch 0050 also rejects the experimental GF117 GPIO/VID voltage preflight:
-the VID bits and VBIOS table represent a command, not independent rail
-measurement. The Rust CI applies 0050 before the Rust guard.
-The Rust patch introduces
-`CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD` (default off; requires Rust and Nouveau).
-When enabled it compiles a Rust scalar validator into `nouveau.ko` and calls it
-from the GF117 core-only path after voltage-command readback. When disabled the
-existing C comparison remains. The function uses no pointers, MMIO, allocation
-or unsafe blocks. This is not a claim that the PWM command measures the real
-rail voltage, nor that a reclock transition is safe.
+This proof of concept is based on CachyOS Linux commit
+`09bc889a111715e4509b3819b628c9b9d9d09a0b` (7.2.9-2) and patches 0001–0022.
+It applies safety patches 0047–0050 before the Rust patch. Patches 0048 and
+0050 continue to reject voltage preflight when GF117 PWM or GPIO/VID values
+are command-derived rather than independent rail measurements.
 
-With the current fail-closed patches applied, the experimental C call site is
-not known to be reachable from the real GF117 voltage backends: 0048 blocks the
-PWM estimate and 0050 blocks GPIO/VID before the call. The C/Rust source harness
-uses a mocked non-GF117 backend to exercise the call and compare scalar
-behavior. It proves the opt-in code is part of the Nouveau build and links to
-Rust, but does not prove execution through an enabled GF117 hardware path. Do
-not relax either safety guard merely to make the Rust function reachable.
+Patch `0001-gf117-rust-voltage-plan-diagnostic.patch` adds the optional
+`CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD` Kconfig setting (default off). When
+enabled, it compiles a small Rust validator into `nouveau.ko`. C calls it
+while rendering Nouveau's read-only `pstate_plan` debugfs diagnostic for
+chipset `0xd7` (GF117). The C helper maps the requested VBIOS VID and passes
+the target, minimum, and maximum microvolt values to Rust. The Rust function
+checks only those scalars and returns a diagnostic status; it does not read
+MMIO, access pointers, allocate memory, or write hardware. It contains no
+`unsafe` blocks. The plan is VBIOS-derived and is not a physical voltage
+measurement.
 
-Host CI exercises the actual PWM, hwmon and cstate source with mock hardware.
-It runs the cstate harness twice, using either
-the C fallback or the Rust object, plus 1,728 boundary cases in the standalone
-FFI proof. A separate Kbuild job verifies the kernel configuration, the Rust
-symbol in Nouveau, and a reference to it from the C clock object. No module is
-loaded. The kernel used has a custom Rust-enabled configuration and is not the
-distributed CachyOS kernel. Do not install these experimental artifacts.
+This moves Rust into an actual kernel Nouveau diagnostic call path while
+keeping it outside the guarded voltage-transition path. It is proof of C/Rust
+build and call integration, not proof that the target notebook executes the
+debugfs path or that any clock, PWM, voltage, or power behavior works on
+hardware. Keep guards 0048 and 0050 unchanged.
 
-The artifact's `SHA256SUMS` uses paths relative to its extracted directory and
-includes the compressed module, configuration, build metadata, symbol listings,
-and build log. Verify it there with `sha256sum -c SHA256SUMS`. These hashes
-identify the uploaded files; they do not prove independent build reproducibility.
+The host harness compares C and Rust results for 1,728 scalar combinations.
+The source harness extracts the actual Nouveau C helper, links it with the
+Rust object, and checks accepted and rejected VBIOS ranges. The in-tree CI
+pins the kernel commit, runs `rustavailable`, records Rust/bindgen/Clang and
+configuration data, checks the C undefined reference and Rust symbol in
+`nouveau.ko`, and attempts a full Rust-enabled kernel build with extended
+MODVERSIONS. No module is installed or loaded. A green host harness or build
+is separate from hardware evidence; full build success also depends on the
+currently running workflow result.
+
+The standalone Kbuild object under `experimental/rust-poc/` remains a toolchain
+probe and is not the in-tree Nouveau component. Neither prototype is a DKMS
+installation method. Verify artifact hashes against an independently trusted
+workflow artifact digest; internal `SHA256SUMS` files alone do not establish
+provenance or byte-for-byte reproducibility.
