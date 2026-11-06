@@ -175,6 +175,20 @@ preparada e `Module.symvers`; com `CONFIG_RUST` e `CONFIG_MODVERSIONS`, exige
 `CONFIG_EXTENDED_MODVERSIONS`. Essas condições explicam por que um teste simples
 de Kbuild ou um conjunto reduzido de headers não estabelece suporte DKMS.
 
+A árvore CachyOS exata usada no build também traz exemplos de drivers Rust em
+`samples/rust/`. `rust_driver_pci.rs` implementa `pci::Driver`, `probe` e
+`unbind`, mapeia BAR e declara registradores tipados para o dispositivo de teste
+QEMU `pci-testdev`. `rust_dma.rs` cobre `Coherent` e `SGTable`; contém chamadas e
+implementações `unsafe` com justificativas locais de invariantes. São exemplos
+reais do kernel e provam que essas APIs existem nesta árvore, mas exercitam um
+dispositivo QEMU de teste, não uma GPU NVIDIA. O `unsafe` do exemplo DMA exige
+avaliação caso a caso; não é precedência para usar as mesmas operações no NVKM.
+
+- [Exemplo PCI no commit de kernel fixado](https://raw.githubusercontent.com/CachyOS/linux/09bc889a111715e4509b3819b628c9b9d9d09a0b/samples/rust/rust_driver_pci.rs)
+- [Exemplo DMA no commit de kernel fixado](https://raw.githubusercontent.com/CachyOS/linux/09bc889a111715e4509b3819b628c9b9d9d09a0b/samples/rust/rust_dma.rs)
+- [Exemplo PCI no upstream Linux](https://github.com/torvalds/linux/blob/master/samples/rust/rust_driver_pci.rs)
+- [Exemplo DMA no upstream Linux](https://github.com/torvalds/linux/blob/master/samples/rust/rust_dma.rs)
+
 - [Rust Quick Start — Linux 7.2](https://docs.kernel.org/7.2/rust/quick-start.html)
 - [Building External Modules — Kbuild](https://docs.kernel.org/kbuild/modules.html)
 - [DKMS README](https://github.com/dkms-project/dkms/blob/main/README.md)
