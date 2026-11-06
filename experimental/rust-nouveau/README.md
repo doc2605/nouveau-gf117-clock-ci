@@ -38,8 +38,9 @@ currently running workflow result.
 
 ## PLL cross-check stage
 
-The candidate next step is `gt215_pll_calc()` in Nouveau's GF100-family clock
-path. Patch `0002-gf117-rust-gt215-pll-crosscheck.patch` adds a no-MMIO Rust
+The current proof-of-concept stage ports the scalar calculation in
+`gt215_pll_calc()` from Nouveau's GF100-family clock path. Patch
+`0002-gf117-rust-gt215-pll-crosscheck.patch` adds a no-MMIO Rust
 implementation using scalar VBIOS limits. With the opt-in Kconfig enabled,
 `gf100.c` invokes it only for chipset `0xd7`, compares its return value and
 coefficients with the existing C result, and uses the Rust result only on an
@@ -54,8 +55,14 @@ The differential harness compiles the actual C `gt215_pll_calc()` from the
 kernel source and compares return codes and successful coefficients against
 the Rust object for integer and fractional modes. It exercises half-reference
 ties, odd reference clocks, P quotient overflow/clamps, M/N bounds, zero and
-invalid values, nonzero fractional flags, 10,000 constrained tuples, and
-50,000 deterministic randomized tuples. It checks fixed result-struct layout
+invalid values, nonzero fractional flags, inclusive input-frequency endpoints,
+and empty M-divider intervals, plus 10,000 constrained tuples and 50,000
+deterministic randomized tuples. The M-bound cases match the project's
+preceding C patches 0011 and 0013, which reject empty intervals and use
+ceil/floor limits; they intentionally do not mirror the unpatched upstream C
+behavior. These added boundary cases passed locally against the patched
+CachyOS 7.3 PLL source with both Clang and GCC. Exact pinned 7.2.9-2 CI for the
+new cases is pending. It checks fixed result-struct layout
 and Rust zeroed error fields; C runs under UndefinedBehaviorSanitizer. The
 actual `calc_pll()` C function body is extracted, compiled, and executed in a
 host harness with stubbed VBIOS parsing and reference-clock helpers. This
@@ -67,7 +74,11 @@ conversion of an oversized P quotient; Rust now mirrors the Linux
 two's-complement result. The differential and adapter harnesses pass with
 both Clang and GCC locally. The
 patch applies with zero fuzz to a synthetic post-0001 tree. Exact pinned
-7.2.9-2 module linkage and full-kernel compilation remain pending remote CI.
+7.2.9-2 module linkage and full-kernel compilation have passed on earlier
+commits. The added boundary cases passed against the available patched
+7.3 source; exact 7.2.9-2 execution of those cases is pending. The manifest
+checksum change from commit `7957cb4` is still being validated by run
+`42212595424`.
 The standalone fractional branch is tested, but the real GF117 caller passes
 `fractional = 0`. No PLL change has been tested on GPU hardware or authorizes
 reclocking.

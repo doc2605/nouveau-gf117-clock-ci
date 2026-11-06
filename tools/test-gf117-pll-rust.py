@@ -158,6 +158,27 @@ int main(void)
 
     compare_case(&sd, &i, 775000, 0, &count);
     compare_case(&sd, &i, 775000, 1, &count);
+    /* Exact-endpoint bounds: 0013 changes the C divider interval to ceil/floor. */
+    compare_case(&sd, &i, 510000, 0, &count);
+    compare_case(&sd, &i, 510000, 1, &count);
+    {
+        int n = 0, m = 0, p = 0;
+        int ret = gt215_pll_calc(&sd, &i, 510000, &n, NULL, &m, &p);
+        assert(ret == 513000 && n == 38 && m == 1 && p == 2);
+    }
+    /* The patched C solver rejects an empty M interval instead of relaxing it. */
+    i.vco1.min_inputfreq = 1000;
+    i.vco1.max_inputfreq = 5000;
+    i.vco1.max_m = 4;
+    compare_case(&sd, &i, 510000, 0, &count);
+    compare_case(&sd, &i, 510000, 1, &count);
+    {
+        int n = 0, m = 0, p = 0;
+        assert(gt215_pll_calc(&sd, &i, 510000, &n, NULL, &m, &p) == -ERANGE);
+    }
+    i.vco1.min_inputfreq = 10000;
+    i.vco1.max_inputfreq = 27000;
+    i.vco1.max_m = 8;
     i.refclk = 1;
     i.vco1.max_freq = UINT32_MAX;
     i.vco1.min_inputfreq = 1;
