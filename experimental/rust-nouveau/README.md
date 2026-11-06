@@ -3,6 +3,9 @@
 After patches 0001–0022 on CachyOS Linux commit
 `09bc889a111715e4509b3819b628c9b9d9d09a0b`, the safety patches 0047–0049 suppress voltage estimates as hwmon measurements
 and block the GF117 voltage preflight when PWM readback is only an estimate.
+Patch 0050 also rejects the experimental GF117 GPIO/VID voltage preflight:
+the VID bits and VBIOS table represent a command, not independent rail
+measurement. The Rust CI applies 0050 before the Rust guard.
 The Rust patch introduces
 `CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD` (default off; requires Rust and Nouveau).
 When enabled it compiles a Rust scalar validator into `nouveau.ko` and calls it

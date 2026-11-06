@@ -53,6 +53,7 @@ jobs:
           kernel="$RUNNER_TEMP/linux-gf117"
           for p in patches/nouveau/[0-9]*.patch; do patch --batch --forward --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/$p"; done
           for p in experimental/rust-nouveau/004[789]-*.patch; do patch --batch --forward --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/$p"; done
+          patch --batch --forward --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch"
           patch --batch --forward --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/experimental/rust-nouveau/0001-gf117-rust-command-guard.patch"
           bash experimental/rust-poc/test-host.sh "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_rust_guard.rs"
           rustc --edition=2021 --crate-type=lib --emit=obj -C panic=abort "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_rust_guard.rs" -o "$RUNNER_TEMP/gf117-guard.o"
@@ -80,7 +81,7 @@ jobs:
           grep -E ' [Tt] gf117_rust_validate_command$' ci-output/nouveau.symbols
           grep -E ' U gf117_rust_validate_command$' ci-output/clock-undefined.symbols
           cp "$kernel/.config" ci-output/kernel.config
-          { printf 'project_commit=%s\nkernel_source_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$kernel" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; modinfo -F vermagic "$module"; sha256sum patches/nouveau/[0-9]*.patch experimental/rust-nouveau/0001-gf117-rust-command-guard.patch experimental/rust-nouveau/004[789]-*.patch; } > ci-output/build-info.txt
+          { printf 'project_commit=%s\nkernel_source_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$kernel" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; modinfo -F vermagic "$module"; sha256sum patches/nouveau/[0-9]*.patch experimental/rust-nouveau/0001-gf117-rust-command-guard.patch experimental/rust-nouveau/004[789]-*.patch experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch; } > ci-output/build-info.txt
           zstd -T0 -6 -o ci-output/nouveau-rust.ko.zst "$module"
           (cd ci-output && sha256sum nouveau-rust.ko.zst kernel.config nouveau.symbols clock-undefined.symbols build-info.txt kernel-build.log > SHA256SUMS)
           (cd ci-output && sha256sum -c SHA256SUMS)
