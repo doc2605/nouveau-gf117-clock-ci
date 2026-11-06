@@ -82,8 +82,9 @@ its fields. Expanded commit `150abac` added the signed P-quotient parity fix,
 layout assertions, and production adapter/fallback host tests; run 42179812950
 passed patch application and host/source tests and was canceled after the same
 lint failure was identified. Commit `ee7b337` documents the C ABI result and
-each field. Its fresh pinned build is run 42180904820; host parity tests pass
-locally, while exact pinned kernel linkage remains unverified until this
+each field. The source now passes a local `rustc -D warnings -D missing-docs`
+check and the differential parity tests. Its fresh pinned build is run
+42180904820; exact pinned kernel linkage remains unverified until this
 workflow completes.
 
 The standalone Kbuild object under `experimental/rust-poc/` remains a toolchain
