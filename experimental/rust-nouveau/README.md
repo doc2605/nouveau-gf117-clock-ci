@@ -77,8 +77,9 @@ passed external ZIP-digest validation, `unzip -t`, every internal `SHA256SUMS`
 entry, and `zstd -t`. The build confirms `CONFIG_RUST=y`, Nouveau as a module,
 the GF117 Rust option enabled, extended modversions, and both Rust entry points
 defined in `nouveau.ko`; `gf100.o` has the Rust PLL reference and the Rust PLL
-object has no panic/undefined symbols. This remains a compile/link result, not
-a load, runtime, or hardware result.
+object has no panic-related undefined symbols. Its symbol report contains the
+expected unresolved kernel thunk `__x86_return_thunk`. This remains a
+compile/link result, not a load, runtime, or hardware result.
 The standalone fractional branch is tested, but the real GF117 caller passes
 `fractional = 0`. No PLL change has been tested on GPU hardware or authorizes
 reclocking.
@@ -174,9 +175,10 @@ The artifact records Rust 1.85.0, bindgen 0.71.1, and Clang 18.1.3. The kernel
 config confirms `CONFIG_RUST=y`, `CONFIG_DRM_NOUVEAU=m`,
 `CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD=y`, `CONFIG_MODVERSIONS=y`, and
 `CONFIG_EXTENDED_MODVERSIONS=y`. The module defines both Rust entry points;
-`gf100.o` references `gf117_rust_gt215_pll_calc`, and the Rust PLL object has
-no panic symbols or unresolved references. This validates compilation and
-linkage only, not module loading or GPU behavior.
+`gf100.o` references `gf117_rust_gt215_pll_calc`, and the Rust PLL object's
+undefined-symbol report has no panic symbols and contains the expected
+`__x86_return_thunk`. This validates compilation and linkage only, not module
+loading or GPU behavior.
 
 The complete ZIPs are not byte-identical: `build-info.txt` records different
 project commits, `kernel-build.log` differs between runner executions, and

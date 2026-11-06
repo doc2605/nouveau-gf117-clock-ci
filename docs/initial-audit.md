@@ -88,7 +88,8 @@ compilação não são tratados como evidência de operação na GPU.
   O config confirma `CONFIG_RUST`, Nouveau modular, opção GF117 Rust,
   `CONFIG_MODVERSIONS` e `CONFIG_EXTENDED_MODVERSIONS`; os dois símbolos Rust
   estão definidos no módulo, `gf100.o` referencia o solver PLL e o objeto Rust
-  não tem referências indefinidas de panic. Isso comprova build e ligação, não
+  não tem referências indefinidas de panic; o relatório contém o thunk de
+  kernel esperado `__x86_return_thunk`. Isso comprova build e ligação, não
   carregamento, execução ou comportamento em GPU.
 - Os testes Rust/PLL reproduzem cálculos C e Rust em harness host e exercitam
   mismatch, limites, casos aleatórios e layout da ABI. São testes de lógica e
