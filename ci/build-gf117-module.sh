@@ -29,6 +29,8 @@ patch --batch --fuzz=0 -d "$src" -p1 \
     -i "$repo/experimental/patches/0048-nouveau-gf117-pwm-estimate-guard.patch"
 patch --batch --fuzz=0 -d "$src" -p1 \
     -i "$repo/experimental/patches/0049-nouveau-initialize-estimate-flag.patch"
+patch --batch --forward --fuzz=0 -d "$src" -p1 \
+    -i "$repo/experimental/patches/0050-nouveau-gf117-vid-preflight-guard.patch"
 python3 tools/test-gf117-pmu-optin.py
 for test in core ram vga crtc worker pll; do
     python3 "tools/test-gf117-$test-source.py" "$src"
@@ -72,7 +74,8 @@ manifest=dict(kernel='7.2.9-2-cachyos',commit=os.environ.get('GITHUB_SHA'),
         'pwm_fail_closed':sha(root/'experimental/patches/0046-nouveau-gf117-pwm-fail-closed.patch'),
         'hwmon_voltage_errors':sha(root/'experimental/patches/0047-nouveau-hwmon-voltage-errors.patch'),
         'pwm_estimate_guard':sha(root/'experimental/patches/0048-nouveau-gf117-pwm-estimate-guard.patch'),
-        'estimate_flag_init':sha(root/'experimental/patches/0049-nouveau-initialize-estimate-flag.patch')})
+        'estimate_flag_init':sha(root/'experimental/patches/0049-nouveau-initialize-estimate-flag.patch'),
+        'gf117_vid_guard':sha(root/'experimental/patches/0050-nouveau-gf117-vid-preflight-guard.patch')})
 (root/'ci-output/manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print(json.dumps(manifest,indent=2))
 MANIFEST
