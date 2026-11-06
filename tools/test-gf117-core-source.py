@@ -84,6 +84,9 @@ int main(void) {
  struct nvkm_pstate state={.base={.voltage=17}};
  assert(nvkm_cstate_prog(&clk,&state,0)==-EOPNOTSUPP && prog_calls==0 && calc_calls==0);
  assert(volt.uv==900000 && fan_raise==0 && volt_raise==0);
+ int current_uv=123,limit_uv=456;
+ assert(nvkm_volt_preflight(&volt,17,0,&current_uv,&limit_uv)==-EOPNOTSUPP);
+ assert(current_uv==-ENODEV && limit_uv==0);
  volt.func=&other_volt_ops;
  assert(nvkm_cstate_prog(&clk,&state,0)==0 && prog_calls==1);
  assert(volt.uv==900000 && volt_lower==0 && fan_lower==0 && boost_queries==0);
