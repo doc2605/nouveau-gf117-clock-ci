@@ -35,13 +35,28 @@ voltage; the validator never authorizes a clock or voltage change.
  ifdef CONFIG_X86
 --- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c
 +++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
-@@ -180,6 +180,23 @@
+@@ -180,6 +180,41 @@
  	.release = single_release,
  };
  
 +#ifdef CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD
-+/* Pure scalar validation for the GF117 read-only VBIOS plan diagnostic. */
++/* Pure scalar ABI; the Rust function does not access hardware or pointers. */
 +extern int gf117_rust_validate_voltage_range(int target_uv, int min_uv, int max_uv);
++#endif
++
++#ifndef CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD
++static int
++nouveau_debugfs_validate_voltage_range_c(int target_uv, int min_uv, int max_uv)
++{
++	if (target_uv <= 0)
++		return -1;
++	if (min_uv <= 0 || max_uv <= 0 || min_uv > max_uv)
++		return -2;
++	if (target_uv < min_uv || target_uv > max_uv)
++		return -3;
++	return 0;
++}
++#endif
 +
 +static int
 +nouveau_debugfs_validate_voltage_plan(struct nvkm_clk *clk,
@@ -49,26 +64,27 @@ voltage; the validator never authorizes a clock or voltage change.
 +{
 +	struct nvkm_volt *volt = clk->subdev.device->volt;
 +	int target_uv = volt ? nvkm_volt_map(volt, cstate->voltage, clk->temp) : 0;
++	int min_uv = volt ? (int)volt->min_uv : 0;
++	int max_uv = volt ? (int)volt->max_uv : 0;
 +
-+	return gf117_rust_validate_voltage_range(target_uv,
-+						 volt ? (int)volt->min_uv : 0,
-+						 volt ? (int)volt->max_uv : 0);
-+}
++#ifdef CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD
++	return gf117_rust_validate_voltage_range(target_uv, min_uv, max_uv);
++#else
++	return nouveau_debugfs_validate_voltage_range_c(target_uv, min_uv, max_uv);
 +#endif
++}
 +
  static int
  nouveau_debugfs_pstate_plan_get(struct seq_file *m, void *data)
  {
-@@ -210,6 +228,12 @@
+@@ -210,6 +246,10 @@
  			seq_printf(m, "state=%d dryrun_error=%d\n", state, ret);
  			continue;
  		}
-+#ifdef CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD
 +		if (clk->subdev.device->chipset == 0xd7) {
 +			int check = nouveau_debugfs_validate_voltage_plan(clk, &cstate);
-+			seq_printf(m, "state=%d rust_voltage_plan_check=%d\n", state, check);
++			seq_printf(m, "state=%d voltage_plan_check=%d\n", state, check);
 +		}
-+#endif
  
  		ram_ret = fb && fb->ram ? nvkm_ram_dryrun(fb->ram, requested_memory,
  							 &ram) : -ENODEV;

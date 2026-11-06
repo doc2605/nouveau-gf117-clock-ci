@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test the actual Nouveau C diagnostic helper linked to the Rust validator."""
+"""Compare the actual Nouveau debugfs helper's C fallback and Rust paths."""
 import sys
 from pathlib import Path
 import subprocess
@@ -11,15 +11,19 @@ if len(sys.argv) != 3:
 source = Path(sys.argv[1]) / "drivers/gpu/drm/nouveau/nouveau_debugfs.c"
 rust_object = Path(sys.argv[2])
 text = source.read_text()
-name = "nouveau_debugfs_validate_voltage_plan"
-start = text.index("\n" + name + "(") + 1
-brace = text.index("{", start)
-end = brace + 1
-depth = 1
-while depth:
-    depth += (text[end] == "{") - (text[end] == "}")
-    end += 1
-helper = "static int\n" + text[start:end]
+def extract_function(name):
+    start = text.index("\n" + name + "(") + 1
+    brace = text.index("{", start)
+    end = brace + 1
+    depth = 1
+    while depth:
+        depth += (text[end] == "{") - (text[end] == "}")
+        end += 1
+    return "static int\n" + text[start:end]
+
+
+helper = extract_function("nouveau_debugfs_validate_voltage_range_c")
+helper += extract_function("nouveau_debugfs_validate_voltage_plan")
 
 callback_start = text.index("\nnouveau_debugfs_pstate_plan_get(") + 1
 callback_brace = text.index("{", callback_start)
@@ -31,7 +35,7 @@ while depth:
 callback = text[callback_start:callback_end]
 assert "chipset == 0xd7" in callback
 assert "nouveau_debugfs_validate_voltage_plan(clk, &cstate)" in callback
-assert "rust_voltage_plan_check" in callback
+assert "voltage_plan_check" in callback
 assert "nvkm_wr32" not in callback and "nvkm_mask" not in callback
 
 stub = r'''
@@ -56,6 +60,9 @@ int main(void)
     struct nvkm_device device = { .volt = &volt, .chipset = 0xd7 };
     struct nvkm_clk clk = { .subdev = { .device = &device }, .temp = 30 };
     struct nvkm_cstate state = { .voltage = 17 };
+    assert(nouveau_debugfs_validate_voltage_range_c(800000, 700000, 1000000) == 0);
+    assert(nouveau_debugfs_validate_voltage_range_c(600000, 700000, 1000000) == -3);
+    assert(nouveau_debugfs_validate_voltage_range_c(800000, 1000000, 700000) == -2);
     assert(nouveau_debugfs_validate_voltage_plan(&clk, &state) == 0);
     assert(map_calls == 1);
     volt.target_uv = 600000;
@@ -69,11 +76,15 @@ int main(void)
 '''
 
 with tempfile.TemporaryDirectory(prefix="gf117-rust-debugfs-test-") as temp:
-    cfile = Path(temp) / "rust-debugfs-test.c"
-    binary = Path(temp) / "rust-debugfs-test"
-    cfile.write_text(stub + helper + main)
-    subprocess.run(["cc", "-std=gnu11", "-Wall", "-Wextra", "-Werror",
-                    str(cfile), str(rust_object), "-o", str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
+    for mode, flags, libraries in [
+        ("rust", ["-DCONFIG_DRM_NOUVEAU_GF117_RUST_GUARD"], [str(rust_object)]),
+        ("c-fallback", [], []),
+    ]:
+        cfile = Path(temp) / f"{mode}.c"
+        binary = Path(temp) / mode
+        cfile.write_text(stub + helper + main)
+        subprocess.run(["cc", "-std=gnu11", "-Wall", "-Wextra", "-Werror",
+                        *flags, str(cfile), *libraries, "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
 
-print("PASS: GF117 debugfs helper calls Rust with the VBIOS target and bounds; boundary cases reject safely")
+print("PASS: Nouveau's actual debugfs helper matches C fallback and Rust across accepted and rejected voltage plans")

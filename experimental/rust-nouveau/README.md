@@ -15,7 +15,9 @@ the target, minimum, and maximum microvolt values to Rust. The Rust function
 checks only those scalars and returns a diagnostic status; it does not read
 MMIO, access pointers, allocate memory, or write hardware. It contains no
 `unsafe` blocks. The plan is VBIOS-derived and is not a physical voltage
-measurement.
+measurement. When the Kconfig option is off, the same C helper validates the
+same values and reports the same result; the option selects which
+implementation handles the diagnostic.
 
 This moves Rust into an actual kernel Nouveau diagnostic call path while
 keeping it outside the guarded voltage-transition path. It is proof of C/Rust
@@ -24,8 +26,9 @@ debugfs path or that any clock, PWM, voltage, or power behavior works on
 hardware. Keep guards 0048 and 0050 unchanged.
 
 The host harness compares C and Rust results for 1,728 scalar combinations.
-The source harness extracts the actual Nouveau C helper, links it with the
-Rust object, and checks accepted and rejected VBIOS ranges. The in-tree CI
+The source harness extracts the actual Nouveau C helper and C fallback, links
+them with the Rust object, and checks accepted and rejected VBIOS ranges in
+both Kconfig modes. The in-tree CI
 pins the kernel commit, runs `rustavailable`, records Rust/bindgen/Clang and
 configuration data, checks the C undefined reference and Rust symbol in
 `nouveau.ko`, and attempts a full Rust-enabled kernel build with extended
