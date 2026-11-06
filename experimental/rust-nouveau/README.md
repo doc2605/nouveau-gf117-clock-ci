@@ -104,16 +104,35 @@ remained. The compressed module and build metadata passed the artifact's
 `SHA256SUMS` checks. The 28,219,665-byte ZIP's digest matched GitHub's artifact
 digest `sha256:1211f68df13a937c878084167d133aae9dde455ce0ad7b8b4f3dad9c5d82cb81`
 (artifact 13488509959). The artifact records project commit `cbba2c8`, kernel
-source commit `09bc889a111715e4509b3819b628c9b9d9d09a0b`, and x86_64. This is
-evidence of a successful build and linked C/Rust boundary in that configuration;
-one artifact does not establish independent byte-for-byte reproducibility,
-module loading, runtime behavior, or hardware operation.
+source commit `09bc889a111715e4509b3819b628c9b9d9d09a0b`, and x86_64.
+
+Run 42190675638 rebuilt the same code at commit `ad38e53` in a separate GitHub
+Actions job with the same recorded kernel and compiler versions. Its artifact
+digest (`sha256:45fc6f5bdb267e87e7c5bc518b76b41a7640adc905ccdbd5d730a2b337404387`,
+ID 13491332165) also matched GitHub's API digest, and its internal
+`SHA256SUMS` checks passed. Comparing the two artifacts showed byte-identical
+compressed and uncompressed Nouveau modules:
+
+| Output | SHA-256 in both runs |
+| --- | --- |
+| `nouveau-rust.ko.zst` | `f3decbd35e4ae5e8a861f78afa30002965bb6c6696cce463446d34d3a2c9253c` |
+| uncompressed `nouveau.ko` | `d3cc32a0aaede4373f20933f201933bf3f0d24d8a9a950d1d9100c06277532bf` |
+| `kernel.config` | `590d951a3b7ad0b29dd00521d37ba24e81d6bc83d8e189623b4ae6e7644e4a84` |
+| `Module.symvers` | `8bff4c168e57002131fa0447a19a910e7f91048106a03dc5279407782e0e3500` |
+| `nouveau.symbols` | `ee0450498cbff9057a7c529ddba295ac5c99924d43701bd9cc441c1dac2abbe0` |
+
+The complete ZIPs are not byte-identical: `build-info.txt` records different
+project commits, and `kernel-build.log` differs between runner executions.
+Thus the two runs establish repeatable module bytes for this pinned kernel,
+configuration, and recorded toolchain, not identical workflow archives or a
+cross-toolchain guarantee. Neither run tests module loading, runtime behavior,
+or hardware operation.
 
 The standalone Kbuild object under `experimental/rust-poc/` remains a toolchain
 probe and is not the in-tree Nouveau component. Neither prototype is a DKMS
-installation method. Verify artifact hashes against an independently trusted
-workflow artifact digest; internal `SHA256SUMS` files alone do not establish
-provenance or byte-for-byte reproducibility.
+installation method. Keep checking the external GitHub artifact digest as well
+as the artifact's internal `SHA256SUMS`; neither check alone proves the broader
+runtime or hardware behavior of the module.
 
 ## Kernel Rust APIs and DKMS boundary
 
