@@ -78,7 +78,7 @@ jobs:
           grep -qx 'CONFIG_EXTENDED_MODVERSIONS=y' "$kernel/.config"
           grep -qx 'CONFIG_DEBUG_INFO=y' "$kernel/.config"
           grep -qx 'CONFIG_DEBUG_INFO_DWARF5=y' "$kernel/.config"
-          test ! -f <(grep -x 'CONFIG_GENKSYMS=y' "$kernel/.config")
+          ! grep -qx 'CONFIG_GENKSYMS=y' "$kernel/.config"
           make -C "$kernel" LLVM=1 -j"$(nproc)" vmlinux modules 2>&1 | tee ci-output/kernel-build.log
           module="$kernel/drivers/gpu/drm/nouveau/nouveau.ko"
           test -s "$module"
