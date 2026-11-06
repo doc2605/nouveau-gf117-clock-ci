@@ -98,7 +98,7 @@ jobs:
           nm -u "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.o" > ci-output/gf100-undefined.symbols
           grep -E ' U gf117_rust_gt215_pll_calc$' ci-output/gf100-undefined.symbols
           nm -u "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.o" > ci-output/gf117-pll-undefined.symbols
-          test ! -s ci-output/gf117-pll-undefined.symbols
+          ! grep -E 'panic_const|core.*panicking' ci-output/gf117-pll-undefined.symbols
           cp "$kernel/.config" ci-output/kernel.config
           cp "$kernel/Module.symvers" ci-output/Module.symvers
           { printf 'project_commit=%s\nkernel_source_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$kernel" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; modinfo -F vermagic "$module"; sha256sum "$kernel/Module.symvers" patches/nouveau/[0-9]*.patch experimental/rust-nouveau/0001-gf117-rust-voltage-plan-diagnostic.patch experimental/rust-nouveau/0002-gf117-rust-gt215-pll-crosscheck.patch experimental/rust-nouveau/gf117_pll.rs tools/test-gf117-pll-rust.py experimental/rust-nouveau/004[789]-*.patch experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch; } > ci-output/build-info.txt

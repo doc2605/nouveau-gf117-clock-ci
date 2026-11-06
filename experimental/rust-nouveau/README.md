@@ -89,8 +89,12 @@ in `gf117_pll.o`. These came from direct arithmetic with the kernel's overflow
 checks enabled. The solver now uses checked multiplication, addition, and
 subtraction for those paths. With local rustc 1.99.1, overflow checks enabled,
 `nm -u` is empty; the exact-source C/Rust and adapter tests pass with Clang and
-GCC, and the module passes the local missing-docs lint. The next pinned Rust
-1.85 Kbuild is needed to verify the fix against the target toolchain.
+GCC, and the module passes the local missing-docs lint. Run 42184995810
+confirmed the Rust object has no panic-runtime references and `nouveau.ko`
+defines both Rust entry points, but the final assertion incorrectly rejected
+its normal `__x86_return_thunk` reference. The workflow now checks specifically
+for unresolved Rust panic helpers and leaves architecture/kernel references to
+Kbuild modpost. A fresh pinned Rust 1.85 run must verify this corrected check.
 
 The standalone Kbuild object under `experimental/rust-poc/` remains a toolchain
 probe and is not the in-tree Nouveau component. Neither prototype is a DKMS
