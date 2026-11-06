@@ -14,6 +14,14 @@ existing C comparison remains. The function uses no pointers, MMIO, allocation
 or unsafe blocks. This is not a claim that the PWM command measures the real
 rail voltage, nor that a reclock transition is safe.
 
+With the current fail-closed patches applied, the experimental C call site is
+not known to be reachable from the real GF117 voltage backends: 0048 blocks the
+PWM estimate and 0050 blocks GPIO/VID before the call. The C/Rust source harness
+uses a mocked non-GF117 backend to exercise the call and compare scalar
+behavior. It proves the opt-in code is part of the Nouveau build and links to
+Rust, but does not prove execution through an enabled GF117 hardware path. Do
+not relax either safety guard merely to make the Rust function reachable.
+
 Host CI exercises the actual PWM, hwmon and cstate source with mock hardware.
 It runs the cstate harness twice, using either
 the C fallback or the Rust object, plus 1,728 boundary cases in the standalone
