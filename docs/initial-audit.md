@@ -82,6 +82,12 @@ compilação não são tratados como evidência de operação na GPU.
   demonstra que os headers CachyOS distribuídos contenham configuração,
   `Module.symvers` e artefatos Rust suficientes, nem que `dkms add/build/install/remove`
   funcione no ciclo real.
+- DKMS não é, por princípio, incompatível com Rust: sua configuração permite
+  escolher um comando `MAKE` customizado. A documentação do kernel, porém, exige
+  que o build externo use Kbuild contra uma árvore preparada; com Rust e
+  `CONFIG_MODVERSIONS`, a configuração e os arquivos de versão precisam suportar
+  `CONFIG_EXTENDED_MODVERSIONS`. A combinação ainda precisa ser testada com os
+  pacotes reais de kernel CachyOS.
 - A extensão Nouveau desta branch modifica código interno do kernel e compila
   `nouveau.ko` dentro de uma árvore de kernel completa. O caminho sustentado pela
   evidência atual é patch + build Kbuild do kernel fixado; anunciar o pacote como
@@ -96,6 +102,23 @@ compilação não são tratados como evidência de operação na GPU.
   concretos; e reservar testes físicos para um procedimento explícito, reversível
   e autorizado.
 
+## Avaliação dos componentes candidatos a Rust
+
+| Componente | Decisão nesta etapa | Motivo e evidência necessária para avançar |
+| --- | --- | --- |
+| Estados GF117 e gerenciamento de energia | Manter em C/NVKM | Envolve estado do dispositivo, worker, serialização e sequência de transição. A prova Rust atual não possui ownership nem callbacks de ciclo de vida. Primeiro exigir contrato de estado e testes dos caminhos de falha. |
+| Inicialização e desligamento | Manter em C/NVKM | A ordem e a liberação de recursos pertencem à integração existente do Nouveau. A abstração Rust PCI disponível não substitui a posse e o teardown de NVKM. |
+| Validação escalar de tensão | Rust no diagnóstico | `target_uv/min_uv/max_uv` são escalares; a validação Rust já está ligada ao `pstate_plan` read-only e comparada ao fallback C. Mapear VID/VBIOS e qualquer transição continuam em C. |
+| Cálculo PLL | Rust em shadow parity | `gt215_pll_calc` é cálculo escalar sem MMIO; Rust replica e compara com C no caminho GF117. Manter C como autoridade até testes de caller/runtime e telemetria suficiente de divergência. |
+| Interpretação VBIOS | Manter parsing em C | Parsers Nouveau operam em estruturas e buffers com invariantes próprias. Extrair campos escalares em C para os validadores já existentes evita duplicar parser sem benefício de segurança comprovado. |
+| Controle e validação PWM | Manter hardware em C; adiar lógica Rust | O getter 0022 combina leitura de hardware, rota de GPIO/VBIOS, parâmetros PWM e limites. A série principal e branches posteriores divergem sobre se esse readback GF117 é confiável; o harness mock testa a lógica, não o significado físico dos registradores. Reabrir após evidência read-only no hardware e manter leitura distinta de escrita. |
+| Diagnóstico e estados de erro | Rust para lógica pura, C para integração | O validador de plano já demonstra a fronteira pequena. Debugfs, logs, locks e propagação a subsistemas continuam sob controle do Nouveau em C. |
+
+Assim, o próximo avanço de Rust com menor risco é aumentar a cobertura diferencial
+da lógica pura já usada (PLL/validação) e só promover um resultado Rust após
+paridade exata e evidência de runtime. A evidência atual não justifica mover
+sequências MMIO, parser de BIOS, worker ou PWM para Rust.
+
 ## Referências oficiais de build Rust
 
 O guia oficial Linux 7.2 descreve `rustc`, `rust-src`, `bindgen`, libclang e o
@@ -107,6 +130,7 @@ de Kbuild ou um conjunto reduzido de headers não estabelece suporte DKMS.
 
 - [Rust Quick Start — Linux 7.2](https://docs.kernel.org/7.2/rust/quick-start.html)
 - [Building External Modules — Kbuild](https://docs.kernel.org/kbuild/modules.html)
+- [DKMS README](https://github.com/dkms-project/dkms/blob/main/README.md)
 - [PCI Rust API — Linux 7.2](https://rust.docs.kernel.org/7.2/kernel/pci/index.html)
 - [MMIO Rust API — Linux 7.2](https://rust.docs.kernel.org/7.2/kernel/io/index.html)
 - [DMA Rust API — Linux 7.2](https://rust.docs.kernel.org/7.2/kernel/dma/index.html)
