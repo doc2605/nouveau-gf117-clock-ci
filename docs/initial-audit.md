@@ -132,6 +132,25 @@ da lógica pura já usada (PLL/validação) e só promover um resultado Rust ap�
 paridade exata e evidência de runtime. A evidência atual não justifica mover
 sequências MMIO, parser de BIOS, worker ou PWM para Rust.
 
+## Estado por fase do briefing
+
+| Fase | Estado observado | Evidência/pendência principal |
+| --- | --- | --- |
+| 1. Auditoria dos dois repositórios | Auditoria inicial documentada | Branches e workflows comparados; continuar atualizando por commit/branch. |
+| 2. Testes e CI | Parcialmente implementada | Harnesses host/source e workflow remoto pinned; builds atuais `42208371477` e `42209101812` ainda em execução. Não há matriz por versões/arquiteturas. |
+| 3. Kernel moderno e DKMS | Estratégia escolhida; DKMS não comprovado | Integração Rust atual modifica árvore interna e requer Kbuild in-tree. Headers deste ambiente não contêm fonte/Kbuild completos do Nouveau. |
+| 4. Proteções e inicialização | Guards de fonte existem; hardware pendente | Patches GF117 adicionam fail-closed em caminhos específicos; ausência de teste físico impede afirmar correção global de init. |
+| 5. Sensores, PWM e tensão | Parcial e experimental | Diagnósticos e mocks existem; leitura GPIO/VID é tabela de comando, PWM GF117 segue controverso, sem medição de trilho confirmada. |
+| 6. Gerenciamento de energia e clocks | Cálculos/documentação, sem RE proprietário | PLL tem paridade C/Rust host e shadow call; análise do blob 390.157 não foi feita devido à restrição da licença. |
+| 7. Reclocking | Experimental, sem promoção física | Código tem guards e preflight, mas não há validação de estabilidade/rollback em GPU. Nenhuma escrita foi executada. |
+| 8. Testes físicos GT 720M | Não realizados nesta etapa | Exigem equipamento/ambiente adequados e autorização explícita para ações que alterem estado. |
+| 9. Empacotamento e instalação | Documentação experimental; pacote ausente | Não há entrega DKMS funcional, instruções de instalação validadas ou compatibilidade de pacote por kernel. |
+
+O objetivo de Rust no driver está em estágio de prova de integração: dois
+componentes escalares compilam dentro do módulo Nouveau com opção Kconfig
+desligada por padrão. Essa etapa não substitui os gates pendentes das fases
+acima nem representa um driver GF117 instalável/validado.
+
 ## Referências oficiais de build Rust
 
 O guia oficial Linux 7.2 descreve `rustc`, `rust-src`, `bindgen`, libclang e o
