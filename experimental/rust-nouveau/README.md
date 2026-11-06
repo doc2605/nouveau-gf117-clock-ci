@@ -18,3 +18,8 @@ FFI proof. A separate Kbuild job verifies the kernel configuration, the Rust
 symbol in Nouveau, and a reference to it from the C clock object. No module is
 loaded. The kernel used has a custom Rust-enabled configuration and is not the
 distributed CachyOS kernel. Do not install these experimental artifacts.
+
+The artifact's `SHA256SUMS` uses paths relative to its extracted directory and
+includes the compressed module, configuration, build metadata, symbol listings,
+and build log. Verify it there with `sha256sum -c SHA256SUMS`. These hashes
+identify the uploaded files; they do not prove independent build reproducibility.

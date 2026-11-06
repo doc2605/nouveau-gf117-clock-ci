@@ -80,9 +80,10 @@ jobs:
           grep -E ' [Tt] gf117_rust_validate_command$' ci-output/nouveau.symbols
           grep -E ' U gf117_rust_validate_command$' ci-output/clock-undefined.symbols
           cp "$kernel/.config" ci-output/kernel.config
-          sha256sum "$module" ci-output/kernel.config > ci-output/SHA256SUMS
           { printf 'project_commit=%s\nkernel_source_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$kernel" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; modinfo -F vermagic "$module"; sha256sum patches/nouveau/[0-9]*.patch experimental/rust-nouveau/0001-gf117-rust-command-guard.patch experimental/rust-nouveau/004[789]-*.patch; } > ci-output/build-info.txt
           zstd -T0 -6 -o ci-output/nouveau-rust.ko.zst "$module"
+          (cd ci-output && sha256sum nouveau-rust.ko.zst kernel.config nouveau.symbols clock-undefined.symbols build-info.txt kernel-build.log > SHA256SUMS)
+          (cd ci-output && sha256sum -c SHA256SUMS)
       - name: Upload logs and experimental artifact
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
