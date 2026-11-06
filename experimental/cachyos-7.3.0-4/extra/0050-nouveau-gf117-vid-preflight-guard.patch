@@ -1,0 +1,20 @@
+From: Nouveau GF117 contributors
+Subject: [PATCH] nouveau: reject unverified GF117 GPIO VID in clock preflight
+
+VID GPIO readback and the VBIOS voltage map describe a command; they do not
+independently establish the rail voltage. Preserve the existing monitoring
+ABI while preventing the experimental preflight from treating it as proof.
+
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c
+@@ -173,6 +173,10 @@
+ 		return -ENODEV;
+ 	if (volt->readback_is_estimate)
+ 		return -EOPNOTSUPP;
++	/* GF117 GPIO VID reports a command, not independent rail voltage. */
++	if (volt->subdev.device->chipset == 0xd7 &&
++	    volt->func->vid_get == nvkm_voltgpio_get)
++		return -EOPNOTSUPP;
+ 	*current_uv = nvkm_volt_get(volt);
+ 	if (*current_uv <= 0)
+ 		return *current_uv ? *current_uv : -ERANGE;
