@@ -43,18 +43,22 @@ bash experimental/dkms/ci-build-only.sh "$src" "$repo/work/build"
 make -C "$repo/work/build" LLVM=1 LLVM_IAS=1 -j"$(nproc)" \
     M="$src/drivers/gpu/drm/nouveau" modules
 module="$src/drivers/gpu/drm/nouveau/nouveau.ko"
+dkms_module="$repo/work/dkms-sandbox/state/nouveau-gf117-exp/0.1.0/7.2.9-2-cachyos/$(uname -m)/module/nouveau.ko"
 [[ "$(modinfo -F vermagic "$module" | xargs)" == '7.2.9-2-cachyos SMP preempt mod_unload' ]]
+[[ -f "$dkms_module" ]]
 llvm-nm --defined-only "$module" > ci-output/nouveau.symbols
 grep -q 'gf117_pmu_new' ci-output/nouveau.symbols
 grep -a -q 'NvGf117Pmu' "$module"
-python3 - "$module" <<'MANIFEST'
+python3 - "$module" "$dkms_module" <<'MANIFEST'
 import hashlib,json,os,subprocess,sys
 from pathlib import Path
-module=Path(sys.argv[1]);root=Path.cwd()
+module=Path(sys.argv[1]);dkms_module=Path(sys.argv[2]);root=Path.cwd()
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 manifest=dict(kernel='7.2.9-2-cachyos',commit=os.environ.get('GITHUB_SHA'),
     schema='gf117-nouveau-module/v1',kernel_release='7.2.9-2-cachyos',
     module_sha256=sha(module),
+    dkms_module_sha256=sha(dkms_module),
+    dkms_module_zstd_sha256=sha(root/'ci-output/dkms-nouveau.ko.zst'),
     srcversion=subprocess.check_output(['modinfo','-F','srcversion',str(module)],text=True).strip(),
     source_sha256=sha(root/'work/source.tar.gz'),
     headers_sha256=sha(root/'ci/kernel-7.2.9-2-headers.tar.zst'),
@@ -62,6 +66,8 @@ manifest=dict(kernel='7.2.9-2-cachyos',commit=os.environ.get('GITHUB_SHA'),
     symvers_sha256=sha(root/'work/build/Module.symvers'),
     compiler=subprocess.check_output(['clang','--version'],text=True).splitlines()[0],
     vermagic=subprocess.check_output(['modinfo','-F','vermagic',str(module)],text=True).strip(),
+    dkms_vermagic=subprocess.check_output(['modinfo','-F','vermagic',str(dkms_module)],text=True).strip(),
+    dkms_srcversion=subprocess.check_output(['modinfo','-F','srcversion',str(dkms_module)],text=True).strip(),
     source_files={name:sha(root/'work/cachyos-7.2.9-2/drivers/gpu/drm/nouveau'/name)
         for name in ('nvkm/engine/device/base.c','nvkm/subdev/pmu/Kbuild',
                      'include/nvkm/subdev/pmu.h','nvkm/subdev/pmu/gf117.c',
@@ -78,5 +84,7 @@ print(json.dumps(manifest,indent=2))
 MANIFEST
 python3 tools/test-verify-gf117-artifact.py
 python3 tools/verify-gf117-artifact.py ci-output/manifest.json "$module" 7.2.9-2-cachyos
+python3 tools/verify-gf117-artifact.py ci-output/manifest.json "$dkms_module" 7.2.9-2-cachyos \
+    --artifact-kind dkms --sha256-file ci-output/dkms-nouveau.ko.sha256
 zstd -T0 -6 -o ci-output/nouveau.ko.zst "$module"
 sha256sum ci-output/nouveau.ko.zst > ci-output/nouveau.ko.zst.sha256

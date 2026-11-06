@@ -30,6 +30,24 @@ that no isolated `sign-file` was available, so the module is unsigned, and
 notes compiler and pahole version differences. This is exact-ABI build
 evidence only.
 
+The artifact verifier distinguishes `standard` and `dkms` module payloads.
+The standard module is checked against `module_sha256`; DKMS verification must
+select `--artifact-kind dkms` and supply the one-entry DKMS SHA-256 sidecar.
+Both paths require the target kernel release explicitly and check the module
+name, vermagic, and srcversion. The manifest records a separate DKMS hash,
+vermagic, and srcversion, so the different DKMS `.ko` cannot accidentally be
+compared with the standard module's digest. The verifier reports whether
+signature metadata is present; it does not determine whether a signer is
+trusted by a target kernel or by Secure Boot.
+The raw DKMS module hash is recorded in the manifest and sidecar; the separate
+compressed DKMS artifact also has its own `.zst.sha256` sidecar.
+
+For a downloaded artifact, first verify the ZIP digest against a value
+obtained through a trusted channel. The internal manifest and sidecar bind the
+module to the build output but are not signatures and do not prove who
+produced them. A passing verification establishes artifact identity only;
+it does not mean the module is installed, loadable, trusted, or runtime-tested.
+
 A separate external-module workflow built for
 [`7.3.0-4-cachyos`](https://github.com/doc2605/nouveau-gf117-clock-ci/actions/runs/42164770902)
 without DKMS installation. Artifact `13478029616` expires 2026-11-20; ZIP
