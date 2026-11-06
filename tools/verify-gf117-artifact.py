@@ -16,6 +16,9 @@ def verify(manifest_path: Path, module_path: Path, repo_root: Path, expected_has
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"manifest missing or invalid: {error}") from error
 
+    if len(expected_hash) != 64 or any(c not in "0123456789abcdefABCDEF" for c in expected_hash):
+        raise ValueError("external SHA-256 is not 64 hexadecimal characters")
+    expected_hash = expected_hash.lower()
     module_hash = sha256(module_path)
     if manifest.get("kernel") != "7.2.9-2-cachyos":
         raise ValueError("manifest identifies an incompatible kernel")

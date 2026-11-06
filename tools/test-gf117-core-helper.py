@@ -20,6 +20,7 @@ assert 'GF117_MODULE_PATH' in s and 'GF117_MODULE_SHA256' in s
 assert 'GF117_MODULE_MANIFEST' in s
 assert 'artifacts/gf117-module/nouveau.ko' in s
 assert 'expected_hash' in s
+assert 'expected_hash=${expected_hash,,}' in s
 assert 'verify-gf117-artifact.py' in s
 assert 'autorização explícita para teste físico de clock' in s
 assert '39024214497' not in s[apply_block:]
@@ -215,6 +216,7 @@ with tempfile.TemporaryDirectory(prefix='gf117-artifact-test-') as d:
         result=subprocess.run(['python3',str(verify),str(manifest),str(module),str(repo),expected],capture_output=True,text=True)
         assert (result.returncode == 0) == ok, result.stdout+result.stderr
     check(sha(module),True)
+    check(sha(module).upper(),True)
     check('0'*64,False)
     payload['patches'][next(iter(project_patches))]='0'*64
     manifest.write_text(json.dumps(payload));check(sha(module),False)

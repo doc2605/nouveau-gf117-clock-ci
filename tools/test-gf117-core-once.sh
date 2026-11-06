@@ -311,6 +311,7 @@ done
     echo "Defina GF117_MODULE_SHA256 com o SHA-256 do módulo verificado no manifesto da CI." >&2
     echo "O driver não foi descarregado." >&2; exit 1;
 }
+expected_hash=${expected_hash,,}
 if [[ ! -r "$module" ]]; then
     echo "Módulo ausente ou ilegível: $module" >&2
     echo "O driver não foi descarregado; copie o artefato indicado e tente novamente." >&2
