@@ -94,10 +94,45 @@ confirmed the Rust object has no panic-runtime references and `nouveau.ko`
 defines both Rust entry points, but the final assertion incorrectly rejected
 its normal `__x86_return_thunk` reference. The workflow now checks specifically
 for unresolved Rust panic helpers and leaves architecture/kernel references to
-Kbuild modpost. A fresh pinned Rust 1.85 run must verify this corrected check.
+Kbuild modpost. Run 42187920923 passed the complete pinned build with Rust
+1.85.0, bindgen 0.71.1, LLVM/Clang, `CONFIG_RUST=y`, and
+`CONFIG_EXTENDED_MODVERSIONS=y`. Kbuild compiled both `gf117_rust_guard.o` and
+`gf117_pll.o`, linked `nouveau.ko`, and the symbol checks found both Rust
+definitions plus their expected C undefined references. The PLL object retained
+only the normal `__x86_return_thunk` undefined reference; no Rust panic helper
+remained. The compressed module and build metadata passed the artifact's
+`SHA256SUMS` checks. The 28,219,665-byte ZIP's digest matched GitHub's artifact
+digest `sha256:1211f68df13a937c878084167d133aae9dde455ce0ad7b8b4f3dad9c5d82cb81`
+(artifact 13488509959). The artifact records project commit `cbba2c8`, kernel
+source commit `09bc889a111715e4509b3819b628c9b9d9d09a0b`, and x86_64. This is
+evidence of a successful build and linked C/Rust boundary in that configuration;
+one artifact does not establish independent byte-for-byte reproducibility,
+module loading, runtime behavior, or hardware operation.
 
 The standalone Kbuild object under `experimental/rust-poc/` remains a toolchain
 probe and is not the in-tree Nouveau component. Neither prototype is a DKMS
 installation method. Verify artifact hashes against an independently trusted
 workflow artifact digest; internal `SHA256SUMS` files alone do not establish
 provenance or byte-for-byte reproducibility.
+
+## Kernel Rust APIs and DKMS boundary
+
+The selected CachyOS source commit contains Rust PCI abstractions in
+`rust/kernel/pci.rs` (`pci::Driver`, `pci::Device`, and BAR resource helpers),
+MMIO abstractions in `rust/kernel/io/mem.rs` (`IoRequest`, `IoMem`, and mapped
+read/write accessors), and coherent DMA wrappers in `rust/kernel/dma.rs`
+(`Coherent`, `CoherentBox`, and `CoherentHandle`). Their presence does not mean
+that Nouveau's NVKM ownership, BAR lifetime, DMA mapping, teardown, or ordering
+rules are already represented by safe Rust abstractions. The current Rust code
+deliberately avoids those APIs and keeps PCI, MMIO, DMA, and device lifecycle in
+the existing C/NVKM implementation.
+
+The separate external-module Kbuild probe passed on run 41810297951, proving
+that a small scalar-only C/Rust module can be built against a fully configured
+Rust-enabled kernel tree. It does not exercise the DKMS lifecycle or the
+Nouveau internals. The GF117 integration is patched into the in-tree Nouveau
+build; the available evidence does not show that CachyOS's distributed kernel
+headers enable Rust or include the full artifacts/toolchain required for DKMS.
+For now, use the kernel's own Kbuild against the pinned, configured source tree
+for this component. Revisit DKMS only after testing against the actual packaged
+headers and a complete install/rebuild/remove cycle.
