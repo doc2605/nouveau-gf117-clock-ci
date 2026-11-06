@@ -1,7 +1,7 @@
 name: GF117 Rust inside Nouveau
 on:
   push:
-    branches: ['research/gf117-rust-nouveau']
+    branches: ['research/gf117-rust-nouveau', 'research/gf117-rust-pll']
   workflow_dispatch:
 permissions:
   contents: read
@@ -55,9 +55,13 @@ jobs:
           for p in experimental/rust-nouveau/004[789]-*.patch; do patch --batch --forward --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/$p"; done
           patch --batch --forward --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch"
           patch --batch --forward --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/experimental/rust-nouveau/0001-gf117-rust-voltage-plan-diagnostic.patch"
+          patch --batch --forward --fuzz=0 -d "$kernel" -p1 -i "$GITHUB_WORKSPACE/experimental/rust-nouveau/0002-gf117-rust-gt215-pll-crosscheck.patch"
           bash experimental/rust-poc/test-host.sh "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_rust_guard.rs"
           rustc --edition=2021 --crate-type=lib --emit=obj -C panic=abort "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_rust_guard.rs" -o "$RUNNER_TEMP/gf117-guard.o"
           python3 tools/test-gf117-rust-debugfs.py "$kernel" "$RUNNER_TEMP/gf117-guard.o"
+          rustc --edition=2021 --crate-type=lib --emit=obj -C panic=abort -C opt-level=2 -C overflow-checks=no "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs" -o "$RUNNER_TEMP/gf117-pll.o"
+          cmp "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs" experimental/rust-nouveau/gf117_pll.rs
+          python3 tools/test-gf117-pll-rust.py "$kernel" "$RUNNER_TEMP/gf117-pll.o"
           python3 tools/test-gf117-pwm-voltage.py "$kernel"
           python3 tools/test-gf117-hwmon-voltage.py "$kernel"
           python3 tools/test-gf117-core-source.py "$kernel"
@@ -87,10 +91,13 @@ jobs:
           nm "$module" > ci-output/nouveau.symbols
           nm -u "$kernel/drivers/gpu/drm/nouveau/nouveau_debugfs.o" > ci-output/debugfs-undefined.symbols
           grep -E ' [Tt] gf117_rust_validate_voltage_range$' ci-output/nouveau.symbols
+          grep -E ' [Tt] gf117_rust_gt215_pll_calc$' ci-output/nouveau.symbols
           grep -E ' U gf117_rust_validate_voltage_range$' ci-output/debugfs-undefined.symbols
+          nm -u "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.o" > ci-output/gf100-undefined.symbols
+          grep -E ' U gf117_rust_gt215_pll_calc$' ci-output/gf100-undefined.symbols
           cp "$kernel/.config" ci-output/kernel.config
           cp "$kernel/Module.symvers" ci-output/Module.symvers
-          { printf 'project_commit=%s\nkernel_source_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$kernel" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; modinfo -F vermagic "$module"; sha256sum "$kernel/Module.symvers" patches/nouveau/[0-9]*.patch experimental/rust-nouveau/0001-gf117-rust-voltage-plan-diagnostic.patch experimental/rust-nouveau/004[789]-*.patch experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch; } > ci-output/build-info.txt
+          { printf 'project_commit=%s\nkernel_source_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$kernel" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; modinfo -F vermagic "$module"; sha256sum "$kernel/Module.symvers" patches/nouveau/[0-9]*.patch experimental/rust-nouveau/0001-gf117-rust-voltage-plan-diagnostic.patch experimental/rust-nouveau/0002-gf117-rust-gt215-pll-crosscheck.patch experimental/rust-nouveau/gf117_pll.rs experimental/rust-nouveau/004[789]-*.patch experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch; } > ci-output/build-info.txt
           zstd -T0 -6 -o ci-output/nouveau-rust.ko.zst "$module"
           (cd ci-output && sha256sum nouveau-rust.ko.zst kernel.config Module.symvers nouveau.symbols debugfs-undefined.symbols build-info.txt kernel-build.log > SHA256SUMS)
           (cd ci-output && sha256sum -c SHA256SUMS)

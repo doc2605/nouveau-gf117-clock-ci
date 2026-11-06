@@ -36,6 +36,32 @@ MODVERSIONS. No module is installed or loaded. A green host harness or build
 is separate from hardware evidence; full build success also depends on the
 currently running workflow result.
 
+## PLL cross-check stage
+
+The candidate next step is `gt215_pll_calc()` in Nouveau's GF100-family clock
+path. Patch `0002-gf117-rust-gt215-pll-crosscheck.patch` adds a no-MMIO Rust
+implementation using scalar VBIOS limits. With the opt-in Kconfig enabled,
+`gf100.c` invokes it only for chipset `0xd7`, compares its return value and
+coefficients with the existing C result, and uses the Rust result only on an
+exact match. A mismatch keeps the C result and emits an error. With the option
+disabled or on other chipsets, behavior stays on the existing C path. This is
+a shadow parity stage: C remains the reference and the extra calculation adds
+some opt-in work. Rust does not parse VBIOS structs, access MMIO, or program
+registers. The `#[repr(C)]` result carries five fixed `i32` fields; the Rust
+function uses no pointers or `unsafe` blocks.
+
+The new differential harness compiles the actual C `gt215_pll_calc()` from the
+kernel source and compares return codes and successful coefficients against
+the Rust object for integer and fractional modes. Locally, it passed edge
+half-reference boundaries, 10,000 constrained tuples, and 50,000
+deterministic randomized parameter/frequency tuples in both modes, with C
+UndefinedBehaviorSanitizer enabled, against the available
+patched CachyOS 7.3 source subset. The patch is also applied with zero fuzz to
+a minimal synthetic post-0001 tree. Exact pinned 7.2.9-2 full-source
+application, module compilation, symbol linkage, and the production C call
+path remain pending remote CI. The cross-check has not been tested on GPU
+hardware and does not authorize reclocking.
+
 The standalone Kbuild object under `experimental/rust-poc/` remains a toolchain
 probe and is not the in-tree Nouveau component. Neither prototype is a DKMS
 installation method. Verify artifact hashes against an independently trusted
