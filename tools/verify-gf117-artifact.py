@@ -22,6 +22,13 @@ def verify(manifest_path: Path, module_path: Path, repo_root: Path, expected_has
     if manifest.get("module_sha256") != module_hash or module_hash != expected_hash:
         raise ValueError("module hash does not match both manifest and external SHA-256")
 
+    project_patch_dir = repo_root / "patches/nouveau"
+    expected_project_patches = {
+        path.name: sha256(path) for path in sorted(project_patch_dir.glob("*.patch"))
+    }
+    if not expected_project_patches or manifest.get("patches") != expected_project_patches:
+        raise ValueError("manifest project patch set does not match the local checkout")
+
     patch_dir = repo_root / "experimental/rust-nouveau"
     patch_names = (
         "0047-nouveau-hwmon-voltage-errors.patch",
@@ -41,4 +48,4 @@ if __name__ == "__main__":
         verify(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
     except (OSError, ValueError) as error:
         raise SystemExit(str(error))
-    print("ok: module hash, kernel, and safety patch hashes verified")
+    print("ok: module hash, kernel, project patches, and safety patch hashes verified")

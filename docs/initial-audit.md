@@ -136,7 +136,8 @@ compilação não são tratados como evidência de operação na GPU.
 - Para `--probe-only`, o helper exige um `.ko` descompactado, o hash externo
   informado em `GF117_MODULE_SHA256` e um manifesto ao lado (ou
   `GF117_MODULE_MANIFEST`). `tools/verify-gf117-artifact.py` confere kernel,
-  hash do módulo e hashes locais dos patches de segurança. O artefato da CI é
+  hash do módulo e hashes locais de toda a série de patches C e dos patches de
+  segurança. O artefato da CI é
   publicado como `nouveau.ko.zst`; deve ser extraído para
   `artifacts/gf117-module/nouveau.ko`, preservando `manifest.json` no mesmo
   diretório. A origem do SHA deve ser o manifesto do artefato baixado/verificado.

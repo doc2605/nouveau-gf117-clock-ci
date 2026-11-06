@@ -2,7 +2,7 @@ name: GF117 Nouveau module
 on:
   workflow_dispatch:
   push:
-    branches: ['ci/gf117-*']
+    branches: ['ci/gf117-*', 'research/gf117-rust-pll']
 permissions:
   contents: read
 jobs:

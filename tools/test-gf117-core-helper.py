@@ -206,17 +206,21 @@ with tempfile.TemporaryDirectory(prefix='gf117-artifact-test-') as d:
     root=Path(d)
     module=root/'nouveau.ko';module.write_bytes(b'fixture module')
     manifest=root/'manifest.json'
+    project_patches={p.name:sha(p) for p in sorted((repo/'patches/nouveau').glob('*.patch'))}
     safety={p.name:sha(p) for p in sorted((repo/'experimental/rust-nouveau').glob('004[789]-*.patch'))}
     safety['0050-nouveau-gf117-vid-preflight-guard.patch']=sha(repo/'experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch')
-    payload={'kernel':'7.2.9-2-cachyos','module_sha256':sha(module),'safety_patches':safety}
+    payload={'kernel':'7.2.9-2-cachyos','module_sha256':sha(module),'patches':project_patches,'safety_patches':safety}
     manifest.write_text(json.dumps(payload))
     def check(expected, ok):
         result=subprocess.run(['python3',str(verify),str(manifest),str(module),str(repo),expected],capture_output=True,text=True)
         assert (result.returncode == 0) == ok, result.stdout+result.stderr
     check(sha(module),True)
     check('0'*64,False)
+    payload['patches'][next(iter(project_patches))]='0'*64
+    manifest.write_text(json.dumps(payload));check(sha(module),False)
+    payload['patches']=project_patches
     payload['safety_patches']['0050-nouveau-gf117-vid-preflight-guard.patch']='0'*64
     manifest.write_text(json.dumps(payload));check(sha(module),False)
     payload['safety_patches']=safety;payload['kernel']='wrong-kernel'
     manifest.write_text(json.dumps(payload));check(sha(module),False)
-    print('ok: artifact verifier accepts matching manifest and rejects hash, guard, and kernel mismatches')
+    print('ok: artifact verifier rejects module, project-patch, guard, and kernel mismatches')
