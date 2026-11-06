@@ -132,6 +132,21 @@ da lógica pura já usada (PLL/validação) e só promover um resultado Rust ap�
 paridade exata e evidência de runtime. A evidência atual não justifica mover
 sequências MMIO, parser de BIOS, worker ou PWM para Rust.
 
+## Comparação da estratégia híbrida atual
+
+| Critério | Evidência atual | Limite atual |
+| --- | --- | --- |
+| Segurança de memória | Funções Rust atuais recebem escalares e não usam `unsafe`, ponteiros ou alocação. | Segurança de memória da aritmética não comprova segurança elétrica ou de sequência de hardware. |
+| Manutenção | Harness compara aritmética C/Rust e executa trechos do caller com stubs; Kconfig mantém Rust opt-in. | Solver duplicado pode divergir; a declaração C e o tipo `#[repr(C)]` precisam continuar sincronizados. |
+| Compatibilidade | Build remoto pinado passou previamente em CachyOS 7.2.9-2, x86_64, Rust 1.85, bindgen 0.71.1 e Clang/LLVM. | Um kernel, arquitetura e toolchain não cobrem outras versões. Build não usa headers DKMS instalados. |
+| Desempenho | PLL é cálculo escalar e sem I/O. | No shadow path o C calcula primeiro e Rust repete a operação; overhead não foi medido. Uma divergência chama `nvkm_error` no caller, sem avaliação de frequência de log. |
+| Custo de integração | Dois objetos entram no módulo existente; Kconfig depende de `RUST`, desativado por padrão; build remoto prepara a toolchain. | Requer árvore de kernel completa e patches na fonte Nouveau; não é um pequeno módulo DKMS independente. |
+
+Essa comparação sustenta manter o PLL como cross-check opt-in até que o custo
+adicional e o comportamento do caller sejam medidos. A meta de reduzir C deve
+ser verificada por migração líquida de código e manutenção do fallback, não
+contando a mera adição de uma função Rust.
+
 ## Estado por fase do briefing
 
 | Fase | Estado observado | Evidência/pendência principal |
