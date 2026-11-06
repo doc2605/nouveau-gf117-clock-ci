@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-//! Pure scalar mirror of Nouveau's GT215 PLL candidate calculator.
+//! Scalar implementation used for GF117's GT215-style PLL candidates.
 //!
 //! Inputs come from the C-owned VBIOS PLL limits. The function does no MMIO,
 //! allocation, pointer access, logging, or register programming. Results are
 //! meaningful only when `ret > 0`; error returns leave coefficient fields at
-//! zero. The caller must keep the C calculator as the authority until parity
-//! tests cover the exact kernel source and GF117 integration path.
+//! zero. When the opt-in GF117 Rust setting is enabled, this calculates the
+//! GF117 candidate; C remains in use for other chipsets and when disabled.
 #![cfg_attr(not(CONFIG_RUST), no_std)]
 
 /// Fixed-layout result shared with Nouveau's C PLL planner.
@@ -34,7 +34,7 @@ fn failure(ret: i32) -> Gf117PllResult {
 /// Calculate a GT215-style PLL candidate from scalar VBIOS bounds.
 ///
 /// `fractional != 0` selects Nouveau's optional fractional-N path. Return
-/// values and successful coefficient fields follow `gt215_pll_calc()`.
+/// values and successful coefficient fields match the patched C solver.
 #[no_mangle]
 pub extern "C" fn gf117_rust_gt215_pll_calc(
     refclk: u32,

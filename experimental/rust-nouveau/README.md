@@ -36,20 +36,18 @@ MODVERSIONS. No module is installed or loaded. A green host harness or build
 is separate from hardware evidence; full build success also depends on the
 currently running workflow result.
 
-## PLL cross-check stage
+## GF117 PLL Rust implementation
 
-The current proof-of-concept stage ports the scalar calculation in
-`gt215_pll_calc()` from Nouveau's GF100-family clock path. Patch
-`0002-gf117-rust-gt215-pll-crosscheck.patch` adds a no-MMIO Rust
-implementation using scalar VBIOS limits. With the opt-in Kconfig enabled,
-`gf100.c` invokes it only for chipset `0xd7`, compares its return value and
-coefficients with the existing C result, and uses the Rust result only on an
-exact match. A mismatch keeps the C result and emits an error. With the option
-disabled or on other chipsets, behavior stays on the existing C path. This is
-a shadow parity stage: C remains the reference and the extra calculation adds
-some opt-in work. Rust does not parse VBIOS structs, access MMIO, or program
-registers. The `#[repr(C)]` result carries five fixed `i32` fields; the Rust
-function uses no pointers or `unsafe` blocks.
+After the successful shadow-parity proof of concept, patch
+`0002-gf117-rust-pll-calculation.patch` makes Rust calculate PLL candidates
+for GF117 (`chipset == 0xd7`) when the opt-in Kconfig setting is enabled.
+`gf100.c` keeps VBIOS parsing and reference-clock reads in C, then passes only
+scalar limits to Rust. Other chipsets and builds with the option disabled use
+the existing C solver. If Rust rejects a GF117 candidate, the planner returns
+no candidate; it does not silently switch implementations. Rust does not
+parse VBIOS structs, access MMIO, or program registers. The `#[repr(C)]` result
+carries five fixed `i32` fields; the Rust function uses no pointers or `unsafe`
+blocks.
 
 The differential harness compiles the actual C `gt215_pll_calc()` from the
 kernel source and compares return codes and successful coefficients against
@@ -64,20 +62,17 @@ behavior. These added boundary cases passed locally against the patched
 CachyOS 7.3 PLL source with both Clang and GCC. Exact pinned 7.2.9-2 CI for the
 new cases is pending. It checks fixed result-struct layout
 and Rust zeroed error fields; C runs under UndefinedBehaviorSanitizer. The
-actual `calc_pll()` C function body is extracted, compiled, and executed in a
-host harness with stubbed VBIOS parsing and reference-clock helpers. This
-verifies the GF117 Rust path and non-GF117 C path without claiming a kernel
-runtime test. A second host binary injects a Rust mismatch and verifies the
-adapter retains the C coefficient. These tests passed against the available
-patched CachyOS 7.3 source subset after a test exposed C's signed-int
-conversion of an oversized P quotient; Rust now mirrors the Linux
-two's-complement result. The differential and adapter harnesses pass with
-both Clang and GCC locally. The
-patch applies with zero fuzz to a synthetic post-0001 tree. Exact pinned
-7.2.9-2 module linkage and full-kernel compilation have passed on earlier
-commits. The added boundary cases passed against the available patched
-7.3 source; exact 7.2.9-2 execution of those cases is pending in run
-`42216528135`.
+actual `calc_pll()` C function body is extracted and executed in host
+harnesses with stubbed VBIOS parsing and reference-clock helpers. They verify
+that Rust handles GF117 without calling the C solver, non-GF117 calls stay in
+C, a Rust error produces no candidate or coefficient write, and a
+Rust-disabled host adapter uses C for GF117. These tests do not claim full
+kernel runtime or hardware behavior. Differential tests passed against the
+patched CachyOS 7.3 source after a test exposed C's signed-int conversion of
+an oversized P quotient; Rust now mirrors the Linux two's-complement result. The differential
+and adapter harnesses pass with both Clang and GCC locally. Exact pinned
+7.2.9-2 build and artifact validation for the authoritative path are pending
+its CI run.
 The standalone fractional branch is tested, but the real GF117 caller passes
 `fractional = 0`. No PLL change has been tested on GPU hardware or authorizes
 reclocking.
@@ -157,7 +152,9 @@ module hash remains `d3cc32a0aaede4373f20933f201933bf3f0d24d8a9a950d1d9100c06277
 
 Run 42216528135 on commit `5a5d31a` passed patch application and the expanded
 C/Rust host parity tests against the pinned 7.2.9-2 source. Its full Rust-enabled
-kernel build is still running; artifact checks remain pending.
+kernel build is still running; artifact checks remain pending. That commit
+still used the shadow call path and does not validate the current authoritative
+GF117 path.
 
 The complete ZIPs are not byte-identical: `build-info.txt` records different
 project commits, `kernel-build.log` differs between runner executions, and

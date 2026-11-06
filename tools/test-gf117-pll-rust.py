@@ -55,8 +55,9 @@ if pll_rust_source.exists():
     assert "subdev->device->chipset == 0xd7" in calc
     assert "struct gf117_pll_result { int ret, n, f_n, m, p; };" in gf100
     assert "gf117_rust_gt215_pll_calc(" in calc
-    assert "gt215_pll_calc(subdev, &limits, freq, &N, NULL, &M, &P)" in calc
-    assert "GF117 Rust PLL mismatch; retaining C result" in calc
+    assert "ret = rust.ret;" in calc
+    assert "else {\n\t\tret = gt215_pll_calc(subdev, &limits, freq, &N, NULL, &M, &P);" in calc
+    assert "#else\n\tret = gt215_pll_calc(subdev, &limits, freq, &N, NULL, &M, &P);" in calc
     for forbidden in ("unsafe", "nvkm_rd32", "nvkm_wr32", "nvkm_mask", "nvkm_volt_set"):
         assert forbidden not in rust_text, f"unexpected hardware operation in Rust: {forbidden}"
     assert "#[repr(C)]" in rust_text
@@ -325,18 +326,35 @@ static void test_production_adapter(void)
     struct nvkm_device device = { .bios = &bios, .chipset = 0xd7 };
     struct gf100_clk clk = { .base = { .subdev = { .device = &device } } };
     int n, m, p;
+    unsigned int c_calls_before;
     u32 expected_coef = 0, coef = 0;
     int expected = gt215_pll_calc(&clk.base.subdev, &bios.limits, 775000,
                                   &n, NULL, &m, &p);
     expected_coef = (p << 16) | (n << 8) | m;
-    assert(calc_pll(&clk, 0, 775000, &coef) == expected);
+    c_calls_before = c_solver_calls;
+    int got = calc_pll(&clk, 0, 775000, &coef);
+    if (got != expected)
+        fprintf(stderr, "GF117 adapter result mismatch: got=%d expected=%d coef=%u expected_coef=%u\n",
+                got, expected, coef, expected_coef);
+    if (coef != expected_coef)
+        fprintf(stderr, "GF117 adapter coefficient mismatch: coef=%u expected=%u\n",
+                coef, expected_coef);
+    assert(got == expected);
     assert(coef == expected_coef);
-    puts("PASS: production GF117 PLL adapter accepts the matching Rust result");
+#ifdef CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD
+    assert(c_solver_calls == c_calls_before);
+    puts("PASS: GF117 PLL adapter uses Rust without calling the C solver");
+#else
+    assert(c_solver_calls == c_calls_before + 1);
+    puts("PASS: Rust-disabled host adapter uses C for GF117");
+#endif
 
     device.chipset = 0x50;
     coef = 0;
+    c_calls_before = c_solver_calls;
     assert(calc_pll(&clk, 0, 775000, &coef) == expected);
     assert(coef == expected_coef);
+    assert(c_solver_calls == c_calls_before + 1);
 }
 """
 
@@ -366,20 +384,38 @@ int main(void)
     struct nvkm_device device = { .bios = &bios, .chipset = 0xd7 };
     struct gf100_clk clk = { .base = { .subdev = { .device = &device } } };
     int n, m, p;
+    unsigned int c_calls_before;
     u32 expected_coef, coef = 0;
     int expected = gt215_pll_calc(&clk.base.subdev, &bios.limits, 775000,
                                   &n, NULL, &m, &p);
     expected_coef = (p << 16) | (n << 8) | m;
-    assert(calc_pll(&clk, 0, 775000, &coef) == expected);
-    assert(coef == expected_coef);
+    c_calls_before = c_solver_calls;
+    coef = 0xdeadbeef;
+    assert(calc_pll(&clk, 0, 775000, &coef) == 0);
+    assert(coef == 0xdeadbeef);
+    assert(c_solver_calls == c_calls_before);
     assert(rust_calls == 1);
-    puts("PASS: production GF117 PLL adapter keeps the C result when Rust disagrees");
+    puts("PASS: GF117 Rust error yields no PLL and does not call the C solver");
 
     device.chipset = 0x50;
     coef = 0;
+    c_calls_before = c_solver_calls;
     assert(calc_pll(&clk, 0, 775000, &coef) == expected);
     assert(coef == expected_coef);
+    assert(c_solver_calls == c_calls_before + 1);
     assert(rust_calls == 1);
+}
+"""
+
+c_solver = "int\n" + text[start:end]
+c_solver = c_solver.replace("gt215_pll_calc(", "gt215_pll_calc_impl(", 1)
+c_solver_wrapper = r"""
+static unsigned int c_solver_calls;
+static int gt215_pll_calc(struct nvkm_subdev *subdev, struct nvbios_pll *info,
+                          u32 freq, int *pN, int *pfN, int *pM, int *P)
+{
+    ++c_solver_calls;
+    return gt215_pll_calc_impl(subdev, info, freq, pN, pfN, pM, P);
 }
 """
 
@@ -395,7 +431,7 @@ with tempfile.TemporaryDirectory(prefix="gf117-pll-rust-") as temp:
     cfile = Path(temp) / "test.c"
     binary = Path(temp) / "test"
     differential_main = main
-    c_source = prefix + "int\n" + text[start:end]
+    c_source = prefix + c_solver + c_solver_wrapper
     cflags = []
     if calc_function:
         c_source += adapter_helpers + calc_function
@@ -417,7 +453,7 @@ with tempfile.TemporaryDirectory(prefix="gf117-pll-rust-") as temp:
     if calc_function:
         fallback = Path(temp) / "fallback.c"
         fallback_binary = Path(temp) / "fallback"
-        fallback.write_text(prefix + "int\n" + text[start:end] + adapter_helpers
+        fallback.write_text(prefix + c_solver + c_solver_wrapper + adapter_helpers
                             + calc_function + fallback_adapter_test)
         subprocess.run([
             cc, "-std=gnu11", "-Wall", "-Wextra", "-Werror",
@@ -426,3 +462,15 @@ with tempfile.TemporaryDirectory(prefix="gf117-pll-rust-") as temp:
             str(fallback), "-o", str(fallback_binary),
         ], check=True)
         run_test(fallback_binary)
+
+        c_only = Path(temp) / "c-only.c"
+        c_only_binary = Path(temp) / "c-only"
+        c_only_main = production_adapter_test + "\nint main(void) { test_production_adapter(); return 0; }\n"
+        c_only.write_text(prefix + c_solver + c_solver_wrapper + adapter_helpers
+                          + calc_function + c_only_main)
+        subprocess.run([
+            cc, "-std=gnu11", "-Wall", "-Wextra", "-Werror",
+            "-Wno-sign-compare", "-fsanitize=undefined", "-fno-sanitize-recover=all",
+            str(c_only), "-o", str(c_only_binary),
+        ], check=True)
+        run_test(c_only_binary)

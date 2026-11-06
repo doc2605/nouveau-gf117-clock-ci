@@ -1,9 +1,9 @@
 From: Nouveau GF117 contributors
-Subject: [PATCH] nouveau: cross-check GF117 PLL candidates in Rust
+Subject: [PATCH] nouveau: use Rust PLL candidates for GF117
 
-Add pure scalar PLL arithmetic in Rust and compare its GF117 result
-with Nouveau's existing C calculation. C remains the authority on a
-mismatch, and this opt-in path performs no new MMIO or programming.
+Use pure scalar Rust PLL arithmetic for GF117 when the opt-in Kconfig
+setting is enabled. Other chipsets and builds without the option retain
+the existing C calculation. This path adds no MMIO or register writes.
 
 diff --git a/drivers/gpu/drm/nouveau/Kbuild b/drivers/gpu/drm/nouveau/Kbuild
 index 7ec7726..ae46409 100644
@@ -26,7 +26,7 @@ index 5e3e154..08462a3 100644
  
  config DRM_NOUVEAU_GF117_RUST_GUARD
 -	bool "Experimental Rust GF117 voltage-plan diagnostic"
-+	bool "Experimental Rust GF117 diagnostics and PLL cross-check"
++	bool "Experimental Rust GF117 diagnostics and PLL calculation"
  	depends on DRM_NOUVEAU && RUST
  	default n
  	help
@@ -34,9 +34,9 @@ index 5e3e154..08462a3 100644
 -	  Validate VBIOS voltage-plan values from Nouveau's read-only pstate_plan
 -	  debugfs diagnostic. This does not measure physical voltage or authorize
 -	  clock changes. This option is experimental and not hardware-validated.
-+	  Enable Rust validation for read-only diagnostics and a PLL arithmetic
-+	  cross-check. The existing C PLL remains the fallback and authority when
-+	  results disagree. Rust performs no MMIO; this option is experimental.
++	  Enable Rust validation for read-only diagnostics and use Rust to calculate
++	  GF117 PLL candidates. Other chipsets use the existing C calculation. Rust
++	  performs no MMIO; this option is experimental and not hardware-validated.
 diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c
 index 163c1b2..8f8d90a 100644
 --- a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c
@@ -57,10 +57,10 @@ index 163c1b2..8f8d90a 100644
  static u32
  calc_pll(struct gf100_clk *clk, int idx, u32 freq, u32 *coef)
  {
-@@ -266,6 +275,25 @@ calc_pll(struct gf100_clk *clk, int idx, u32 freq, u32 *coef)
- 	if (ret <= 0)
- 		return 0;
- 
+@@ -270,3 +279,20 @@ calc_pll(struct gf100_clk *clk, int idx, u32 freq, u32 *coef)
+-	ret = gt215_pll_calc(subdev, &limits, freq, &N, NULL, &M, &P);
+-	if (ret <= 0)
+-		return 0;
 +#ifdef CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD
 +	if (subdev->device->chipset == 0xd7) {
 +		struct gf117_pll_result rust = gf117_rust_gt215_pll_calc(
@@ -69,33 +69,31 @@ index 163c1b2..8f8d90a 100644
 +			limits.vco1.min_m, limits.vco1.max_m,
 +			limits.vco1.min_n, limits.vco1.max_n,
 +			limits.min_p, limits.max_p, freq, 0);
-+		if (rust.ret == ret && rust.n == N && rust.m == M && rust.p == P) {
-+			ret = rust.ret;
-+			N = rust.n;
-+			M = rust.m;
-+			P = rust.p;
-+		} else {
-+			nvkm_error(subdev, "GF117 Rust PLL mismatch; retaining C result\n");
-+		}
++		ret = rust.ret;
++		N = rust.n;
++		M = rust.m;
++		P = rust.p;
++	} else {
++		ret = gt215_pll_calc(subdev, &limits, freq, &N, NULL, &M, &P);
 +	}
++#else
++	ret = gt215_pll_calc(subdev, &limits, freq, &N, NULL, &M, &P);
 +#endif
-+
- 	*coef = (P << 16) | (N << 8) | M;
- 	return ret;
- }
++	if (ret <= 0)
++		return 0;
 diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs
 new file mode 100644
 --- /dev/null
 +++ b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs
 @@ -0,0 +1,244 @@
 +// SPDX-License-Identifier: MIT
-+//! Pure scalar mirror of Nouveau's GT215 PLL candidate calculator.
++//! Scalar implementation used for GF117's GT215-style PLL candidates.
 +//!
 +//! Inputs come from the C-owned VBIOS PLL limits. The function does no MMIO,
 +//! allocation, pointer access, logging, or register programming. Results are
 +//! meaningful only when `ret > 0`; error returns leave coefficient fields at
-+//! zero. The caller must keep the C calculator as the authority until parity
-+//! tests cover the exact kernel source and GF117 integration path.
++//! zero. When the opt-in GF117 Rust setting is enabled, this calculates the
++//! GF117 candidate; C remains in use for other chipsets and when disabled.
 +#![cfg_attr(not(CONFIG_RUST), no_std)]
 +
 +/// Fixed-layout result shared with Nouveau's C PLL planner.
@@ -124,7 +122,7 @@ new file mode 100644
 +/// Calculate a GT215-style PLL candidate from scalar VBIOS bounds.
 +///
 +/// `fractional != 0` selects Nouveau's optional fractional-N path. Return
-+/// values and successful coefficient fields follow `gt215_pll_calc()`.
++/// values and successful coefficient fields match the patched C solver.
 +#[no_mangle]
 +pub extern "C" fn gf117_rust_gt215_pll_calc(
 +    refclk: u32,
