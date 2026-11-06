@@ -59,8 +59,9 @@ deterministic randomized tuples. The M-bound cases match the project's
 preceding C patches 0011 and 0013, which reject empty intervals and use
 ceil/floor limits; they intentionally do not mirror the unpatched upstream C
 behavior. These added boundary cases passed locally against the patched
-CachyOS 7.3 PLL source with both Clang and GCC. Exact pinned 7.2.9-2 CI for the
-new cases is pending. It checks fixed result-struct layout
+CachyOS 7.3 PLL source with both Clang and GCC. Pinned 7.2.9-2 CI run
+42220548739 passed the expanded host suite and full Rust-enabled kernel build.
+It checks fixed result-struct layout
 and Rust zeroed error fields; C runs under UndefinedBehaviorSanitizer. The
 actual `calc_pll()` C function body is extracted and executed in host
 harnesses with stubbed VBIOS parsing and reference-clock helpers. They verify
@@ -70,9 +71,14 @@ Rust-disabled host adapter uses C for GF117. These tests do not claim full
 kernel runtime or hardware behavior. Differential tests passed against the
 patched CachyOS 7.3 source after a test exposed C's signed-int conversion of
 an oversized P quotient; Rust now mirrors the Linux two's-complement result. The differential
-and adapter harnesses pass with both Clang and GCC locally. Exact pinned
-7.2.9-2 build and artifact validation for the authoritative path are pending
-its CI run.
+and adapter harnesses pass with both Clang and GCC locally. The exact pinned
+7.2.9-2 build for the authoritative path passed in run 42220548739; its artifact
+passed external ZIP-digest validation, `unzip -t`, every internal `SHA256SUMS`
+entry, and `zstd -t`. The build confirms `CONFIG_RUST=y`, Nouveau as a module,
+the GF117 Rust option enabled, extended modversions, and both Rust entry points
+defined in `nouveau.ko`; `gf100.o` has the Rust PLL reference and the Rust PLL
+object has no panic/undefined symbols. This remains a compile/link result, not
+a load, runtime, or hardware result.
 The standalone fractional branch is tested, but the real GF117 caller passes
 `fractional = 0`. No PLL change has been tested on GPU hardware or authorizes
 reclocking.
@@ -150,11 +156,27 @@ The downloaded archive passed `unzip -t`, and every entry in its internal
 `gf100-undefined.symbols` and `gf117-pll-undefined.symbols`. The decompressed
 module hash remains `d3cc32a0aaede4373f20933f201933bf3f0d24d8a9a950d1d9100c06277532bf`.
 
-Run 42216528135 on commit `5a5d31a` passed patch application and the expanded
-C/Rust host parity tests against the pinned 7.2.9-2 source. Its full Rust-enabled
-kernel build is still running; artifact checks remain pending. That commit
-still used the shadow call path and does not validate the current authoritative
-GF117 path.
+Run 42216528135 on commit `5a5d31a` passed patch application, expanded C/Rust
+host parity tests, and the Rust-enabled kernel build against the pinned
+7.2.9-2 source. It used the shadow call path and does not validate the current
+authoritative GF117 path.
+
+Run 42220548739 on commit `4b5e4f8e664a7612ed11879da68410b1f3f31fc8` passed
+the patch and host-test stage, configured and built `vmlinux` and modules with
+Rust enabled, and uploaded artifact `13505065977` (28,225,432 bytes). GitHub's
+API digest `sha256:83c25ddec36f85ddcdfea45382d239ca78e75779a7f60f8713d199b6a0a73c0a`
+matched the downloaded ZIP. `unzip -t`, all nine internal checksums, and the
+compressed module's zstd integrity check passed. The decompressed
+`nouveau.ko` SHA-256 is
+`e403fa16877e0d737365656a72a44e7576b63dd4df5ad7582c03eb288a1c2c73e`; its
+vermagic is `7.2.9-g09bc889a1117-dirty SMP preempt mod_unload modversions`.
+The artifact records Rust 1.85.0, bindgen 0.71.1, and Clang 18.1.3. The kernel
+config confirms `CONFIG_RUST=y`, `CONFIG_DRM_NOUVEAU=m`,
+`CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD=y`, `CONFIG_MODVERSIONS=y`, and
+`CONFIG_EXTENDED_MODVERSIONS=y`. The module defines both Rust entry points;
+`gf100.o` references `gf117_rust_gt215_pll_calc`, and the Rust PLL object has
+no panic symbols or unresolved references. This validates compilation and
+linkage only, not module loading or GPU behavior.
 
 The complete ZIPs are not byte-identical: `build-info.txt` records different
 project commits, `kernel-build.log` differs between runner executions, and

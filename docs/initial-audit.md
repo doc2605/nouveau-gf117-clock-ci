@@ -61,7 +61,10 @@ compilação não são tratados como evidência de operação na GPU.
   Depois de validar o cálculo em shadow, a alteração mais recente faz Rust
   produzir o resultado para GF117; C continua para outros chips e quando a
   opção está desligada. Harnesses cobrem retorno, coeficientes, C-only e erros,
-  mas o build pinned dessa promoção ainda está pendente. As funções Rust não
+  e o build pinned dessa promoção passou em `42220548739` (kernel CachyOS
+  `09bc889a111715e4509b3819b628c9b9d9d09a0b`, commit do projeto
+  `4b5e4f8e664a7612ed11879da68410b1f3f31fc8`). O artefato foi validado por
+  digest externo, `unzip -t`, checksums internos e `zstd -t`. As funções Rust não
   recebem ponteiros, não interpretam estruturas VBIOS e não fazem MMIO. Ainda
   não há migração de ownership/lifecycle PCI/NVKM para Rust. O total líquido de
   linhas C específico do projeto ainda não foi reduzido: o solver C continua
@@ -73,6 +76,20 @@ compilação não são tratados como evidência de operação na GPU.
   digest externo igual ao informado pela API do GitHub e `SHA256SUMS` aprovado.
   Isso não prova compatibilidade entre kernels/toolchains, carregamento,
   execução em hardware, desempenho ou segurança de reclocking.
+- O run `42216528135` também concluiu com sucesso a compilação pinned e os
+  testes ampliados, mas ainda usava o caminho PLL Rust em shadow.
+- O run autoritativo `42220548739` compilou `vmlinux` e módulos com Rust e a
+  opção GF117 ligada. O artefato `13505065977` (28,225,432 bytes) tem digest
+  API `sha256:83c25ddec36f85ddcdfea45382d239ca78e75779a7f60f8713d199b6a0a73c0a`,
+  igual ao ZIP baixado; `unzip -t`, todos os nove itens de `SHA256SUMS` e
+  `zstd -t` passaram. O módulo descompactado tem SHA-256
+  `e403fa16877e0d737365656a72a44e7576b63dd4df5ad7582c03eb288a1c2c73e` e
+  vermagic `7.2.9-g09bc889a1117-dirty SMP preempt mod_unload modversions`.
+  O config confirma `CONFIG_RUST`, Nouveau modular, opção GF117 Rust,
+  `CONFIG_MODVERSIONS` e `CONFIG_EXTENDED_MODVERSIONS`; os dois símbolos Rust
+  estão definidos no módulo, `gf100.o` referencia o solver PLL e o objeto Rust
+  não tem referências indefinidas de panic. Isso comprova build e ligação, não
+  carregamento, execução ou comportamento em GPU.
 - Os testes Rust/PLL reproduzem cálculos C e Rust em harness host e exercitam
   mismatch, limites, casos aleatórios e layout da ABI. São testes de lógica e
   integração de compilação; não são teste KUnit, load/unload ou operação da GPU.
@@ -123,14 +140,15 @@ compilação não são tratados como evidência de operação na GPU.
 | Estados GF117 e gerenciamento de energia | Manter em C/NVKM | Envolve estado do dispositivo, worker, serialização e sequência de transição. A prova Rust atual não possui ownership nem callbacks de ciclo de vida. Primeiro exigir contrato de estado e testes dos caminhos de falha. |
 | Inicialização e desligamento | Manter em C/NVKM | A ordem e a liberação de recursos pertencem à integração existente do Nouveau. A abstração Rust PCI disponível não substitui a posse e o teardown de NVKM. |
 | Validação escalar de tensão | Rust no diagnóstico | `target_uv/min_uv/max_uv` são escalares; a validação Rust já está ligada ao `pstate_plan` read-only e comparada ao fallback C. Mapear VID/VBIOS e qualquer transição continuam em C. |
-| Cálculo PLL | Rust autoritativo para GF117, opt-in e experimental; CI pós-promoção pendente | Rust calcula o candidato GF117 quando a opção está ativa; C continua para outros chips e builds com a opção desligada. O solver é escalar e não toca MMIO. O caminho de configuração/programação posterior ainda não tem teste físico. |
+| Cálculo PLL | Rust autoritativo para GF117, opt-in e experimental; build pinned aprovado | Rust calcula o candidato GF117 quando a opção está ativa; C continua para outros chips e builds com a opção desligada. O solver é escalar e não toca MMIO. O caminho de configuração/programação posterior ainda não tem teste físico. |
 | Interpretação VBIOS | Manter parsing em C | Parsers Nouveau operam em estruturas e buffers com invariantes próprias. Extrair campos escalares em C para os validadores já existentes evita duplicar parser sem benefício de segurança comprovado. |
 | Controle e validação PWM | Manter hardware em C; adiar lógica Rust | O getter 0022 combina leitura de hardware, rota de GPIO/VBIOS, parâmetros PWM e limites. A série principal e branches posteriores divergem sobre se esse readback GF117 é confiável; o harness mock testa a lógica, não o significado físico dos registradores. Reabrir após evidência read-only no hardware e manter leitura distinta de escrita. |
 | Diagnóstico e estados de erro | Rust para lógica pura, C para integração | O validador de plano já demonstra a fronteira pequena. Debugfs, logs, locks e propagação a subsistemas continuam sob controle do Nouveau em C. |
 
 Assim, a promoção atual se restringe à aritmética pura do PLL GF117, depois da
-paridade diferencial contra o C patched. O próximo avanço depende do build
-pinned da nova rota e da verificação do artefato. A evidência não justifica
+paridade diferencial contra o C patched e de build/artefato pinned validados. O
+próximo avanço depende de validar novos kernels e integrar mais lógica segura.
+A evidência não justifica
 mover sequências MMIO, parser de BIOS, worker, ciclo de vida PCI/NVKM ou PWM
 para Rust.
 
@@ -158,15 +176,15 @@ específico do projeto, sem retirar suporte C necessário.
 | 3. Kernel moderno e DKMS | Estratégia escolhida; DKMS não comprovado | Integração Rust atual modifica árvore interna e requer Kbuild in-tree. Headers deste ambiente não contêm fonte/Kbuild completos do Nouveau. |
 | 4. Proteções e inicialização | Guards de fonte existem; hardware pendente | Patches GF117 adicionam fail-closed em caminhos específicos; ausência de teste físico impede afirmar correção global de init. |
 | 5. Sensores, PWM e tensão | Parcial e experimental | Diagnósticos e mocks existem; leitura GPIO/VID é tabela de comando, PWM GF117 segue controverso, sem medição de trilho confirmada. |
-| 6. Gerenciamento de energia e clocks | Cálculos/documentação, sem RE proprietário | PLL tem paridade C/Rust host e rota Rust opt-in para GF117; nova compilação pinned pendente. Análise do blob 390.157 não foi feita devido à restrição da licença. |
+| 6. Gerenciamento de energia e clocks | Cálculos/documentação, sem RE proprietário | PLL tem paridade C/Rust host e rota Rust opt-in para GF117, compilada no kernel pinned; não há validação de execução em hardware. Análise do blob 390.157 não foi feita devido à restrição da licença. |
 | 7. Reclocking | Experimental, sem promoção física | Código tem guards e preflight, mas não há validação de estabilidade/rollback em GPU. Nenhuma escrita foi executada. |
 | 8. Testes físicos GT 720M | Não realizados nesta etapa | Exigem equipamento/ambiente adequados e autorização explícita para ações que alterem estado. |
 | 9. Empacotamento e instalação | Documentação experimental; pacote ausente | Não há entrega DKMS funcional, instruções de instalação validadas ou compatibilidade de pacote por kernel. |
 
-O build e a ligação de dois componentes Rust dentro de `nouveau.ko` já foram
-demonstrados em quatro execuções pinned do caminho anterior. A fonte agora
-torna Rust responsável pelo candidato PLL GF117 quando a opção Kconfig está
-ativa; o novo build pinned dessa promoção ainda precisa passar. Isso não
+O build e a ligação de dois componentes Rust dentro de `nouveau.ko` foram
+demonstrados em várias execuções pinned do caminho anterior. O build pinned
+`42220548739` também valida a promoção da rota de cálculo PLL GF117 a Rust
+quando a opção Kconfig está ativa. Isso não
 representa um driver GF117 instalável ou validado em hardware, e não reduz
 ainda o total líquido de C específico do projeto.
 
