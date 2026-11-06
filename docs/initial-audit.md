@@ -92,10 +92,17 @@ compilação não são tratados como evidência de operação na GPU.
   `nouveau.ko` dentro de uma árvore de kernel completa. O caminho sustentado pela
   evidência atual é patch + build Kbuild do kernel fixado; anunciar o pacote como
   DKMS funcional seria prematuro.
+- No ambiente de desenvolvimento consultado, o kernel em execução é
+  `7.3.0-4-cachyos`, sem link `build` correspondente. Há árvores de headers para
+  outros releases, mas a árvore 7.3.1 disponível expõe o `Kconfig` do Nouveau
+  sem seu `Makefile`/`Kbuild` completo. Isso confirma que os headers instalados
+  aqui não bastam para repetir a integração do Nouveau. É observação deste
+  ambiente, não de todos os pacotes CachyOS.
 - Não foi feita instalação, alteração de initramfs, carregamento do módulo Rust,
   escrita de registradores, mudança de clocks/tensão/PWM, ou teste físico nesta
-  auditoria. Não há relatório de engenharia reversa baseado em execução do blob
-  proprietário anexado a esta prova Rust.
+  auditoria. O estado e limites da investigação estática estão em
+  [`docs/reverse-engineering/status.md`](reverse-engineering/status.md); não há
+  análise do blob proprietário.
 - Próximos gates: confirmar o run `42208371477`; manter leitura PWM separada de
   escrita e bloqueada quando a fonte não for independente; documentar suporte
   de build por kernel; só avaliar um ciclo DKMS com os pacotes de headers
