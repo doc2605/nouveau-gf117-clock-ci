@@ -96,6 +96,9 @@ int main(void) {
  assert(nvkm_cstate_prog(&clk,&state,0)==-EOPNOTSUPP);
  assert(calc_calls==0 && prog_calls==0 && fan_raise==0 && volt_raise==0);
  int current_uv,limit_uv;
+ current_uv=123;limit_uv=456;
+ assert(nvkm_volt_preflight(&volt,17,0,&current_uv,&limit_uv)==-EOPNOTSUPP);
+ assert(current_uv==-ENODEV && limit_uv==0);
  dev.chipset=0xd8;
  assert(nvkm_volt_preflight(&volt,17,0,&current_uv,&limit_uv)==850000);
  dev.chipset=0xd7;
@@ -226,3 +229,4 @@ with tempfile.TemporaryDirectory(prefix='gf117-core-test-') as d:
         subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fsanitize=undefined',
                         '-fno-sanitize-recover=all',str(c),'-o',str(exe)],check=True)
         subprocess.run([str(exe)],check=True)
+
