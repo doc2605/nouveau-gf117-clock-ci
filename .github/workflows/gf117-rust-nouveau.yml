@@ -68,22 +68,31 @@ jobs:
           kernel="$RUNNER_TEMP/linux-gf117"
           make -C "$kernel" LLVM=1 rustavailable
           make -C "$kernel" LLVM=1 defconfig
-          "$kernel/scripts/config" --file "$kernel/.config" -e MODULES -e RUST -m DRM_NOUVEAU -e DRM_NOUVEAU_GF117_RUST_GUARD -d MODVERSIONS -d DEBUG_INFO_BTF -d LTO_CLANG
+          "$kernel/scripts/config" --file "$kernel/.config" -e MODULES -e RUST -m DRM_NOUVEAU -e DRM_NOUVEAU_GF117_RUST_GUARD -e MODVERSIONS -e GENDWARFKSYMS -d GENKSYMS -e DEBUG_INFO -e DEBUG_INFO_DWARF5 -d DEBUG_INFO_REDUCED -d DEBUG_INFO_SPLIT -d DEBUG_INFO_BTF -d LTO_CLANG
           make -C "$kernel" LLVM=1 olddefconfig
           grep -qx 'CONFIG_RUST=y' "$kernel/.config"
           grep -qx 'CONFIG_DRM_NOUVEAU=m' "$kernel/.config"
           grep -qx 'CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD=y' "$kernel/.config"
+          grep -qx 'CONFIG_MODVERSIONS=y' "$kernel/.config"
+          grep -qx 'CONFIG_GENDWARFKSYMS=y' "$kernel/.config"
+          grep -qx 'CONFIG_EXTENDED_MODVERSIONS=y' "$kernel/.config"
+          grep -qx 'CONFIG_DEBUG_INFO=y' "$kernel/.config"
+          grep -qx 'CONFIG_DEBUG_INFO_DWARF5=y' "$kernel/.config"
+          test ! -f <(grep -x 'CONFIG_GENKSYMS=y' "$kernel/.config")
           make -C "$kernel" LLVM=1 -j"$(nproc)" vmlinux modules 2>&1 | tee ci-output/kernel-build.log
           module="$kernel/drivers/gpu/drm/nouveau/nouveau.ko"
           test -s "$module"
+          test -s "$kernel/Module.symvers"
+          readelf -SW "$module" | grep -E '__version_ext_names|__version_ext_crcs'
           nm "$module" > ci-output/nouveau.symbols
           nm -u "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/base.o" > ci-output/clock-undefined.symbols
           grep -E ' [Tt] gf117_rust_validate_command$' ci-output/nouveau.symbols
           grep -E ' U gf117_rust_validate_command$' ci-output/clock-undefined.symbols
           cp "$kernel/.config" ci-output/kernel.config
-          { printf 'project_commit=%s\nkernel_source_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$kernel" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; modinfo -F vermagic "$module"; sha256sum patches/nouveau/[0-9]*.patch experimental/rust-nouveau/0001-gf117-rust-command-guard.patch experimental/rust-nouveau/004[789]-*.patch experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch; } > ci-output/build-info.txt
+          cp "$kernel/Module.symvers" ci-output/Module.symvers
+          { printf 'project_commit=%s\nkernel_source_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$kernel" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; modinfo -F vermagic "$module"; sha256sum "$kernel/Module.symvers" patches/nouveau/[0-9]*.patch experimental/rust-nouveau/0001-gf117-rust-command-guard.patch experimental/rust-nouveau/004[789]-*.patch experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch; } > ci-output/build-info.txt
           zstd -T0 -6 -o ci-output/nouveau-rust.ko.zst "$module"
-          (cd ci-output && sha256sum nouveau-rust.ko.zst kernel.config nouveau.symbols clock-undefined.symbols build-info.txt kernel-build.log > SHA256SUMS)
+          (cd ci-output && sha256sum nouveau-rust.ko.zst kernel.config Module.symvers nouveau.symbols clock-undefined.symbols build-info.txt kernel-build.log > SHA256SUMS)
           (cd ci-output && sha256sum -c SHA256SUMS)
       - name: Upload logs and experimental artifact
         if: always()
