@@ -52,7 +52,7 @@ function uses no pointers or `unsafe` blocks.
 
 The new differential harness compiles the actual C `gt215_pll_calc()` from the
 kernel source and compares return codes and successful coefficients against
-the Rust object for integer and fractional modes. Locally, it passed edge
+the Rust object for integer and fractional modes. Locally, it passed
 half-reference boundaries, 10,000 constrained tuples, and 50,000
 deterministic randomized parameter/frequency tuples in both modes, with C
 UndefinedBehaviorSanitizer enabled, against the available
@@ -61,6 +61,15 @@ a minimal synthetic post-0001 tree. Exact pinned 7.2.9-2 full-source
 application, module compilation, symbol linkage, and the production C call
 path remain pending remote CI. The cross-check has not been tested on GPU
 hardware and does not authorize reclocking.
+
+The first pinned CI attempt, run 42176186321 on commit `6ad1929`, failed in
+the host differential link before the full kernel build. Rust 1.85 emitted an
+unresolved `core::panicking::panic_const_div_by_zero` reference for guarded
+division in the no-std object. The solver now uses checked division and
+remainder operations; the local optimized no-std object has no undefined
+symbols and the differential harness still passes. A fresh pinned CI run is
+required to verify this fix before the PLL cross-check is considered
+compilable.
 
 The standalone Kbuild object under `experimental/rust-poc/` remains a toolchain
 probe and is not the in-tree Nouveau component. Neither prototype is a DKMS

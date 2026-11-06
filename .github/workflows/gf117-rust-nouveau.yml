@@ -60,6 +60,7 @@ jobs:
           rustc --edition=2021 --crate-type=lib --emit=obj -C panic=abort "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_rust_guard.rs" -o "$RUNNER_TEMP/gf117-guard.o"
           python3 tools/test-gf117-rust-debugfs.py "$kernel" "$RUNNER_TEMP/gf117-guard.o"
           rustc --edition=2021 --crate-type=lib --emit=obj -C panic=abort -C opt-level=2 -C overflow-checks=no "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs" -o "$RUNNER_TEMP/gf117-pll.o"
+          test -z "$(nm -u "$RUNNER_TEMP/gf117-pll.o")"
           cmp "$kernel/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs" experimental/rust-nouveau/gf117_pll.rs
           python3 tools/test-gf117-pll-rust.py "$kernel" "$RUNNER_TEMP/gf117-pll.o"
           python3 tools/test-gf117-pwm-voltage.py "$kernel"
