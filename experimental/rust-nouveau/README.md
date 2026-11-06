@@ -82,10 +82,15 @@ its fields. Expanded commit `150abac` added the signed P-quotient parity fix,
 layout assertions, and production adapter/fallback host tests; run 42179812950
 passed patch application and host/source tests and was canceled after the same
 lint failure was identified. Commit `ee7b337` documents the C ABI result and
-each field. The source now passes a local `rustc -D warnings -D missing-docs`
-check and the differential parity tests. Its fresh pinned build is run
-42180904820; exact pinned kernel linkage remains unverified until this
-workflow completes.
+each field. The next pinned run, 42180904820, compiled and linked
+`nouveau.ko` and defined both Rust entry points, but its final no-undefined
+check found `panic_const_mul_overflow` and `panic_const_sub_overflow` references
+in `gf117_pll.o`. These came from direct arithmetic with the kernel's overflow
+checks enabled. The solver now uses checked multiplication, addition, and
+subtraction for those paths. With local rustc 1.99.1, overflow checks enabled,
+`nm -u` is empty; the exact-source C/Rust and adapter tests pass with Clang and
+GCC, and the module passes the local missing-docs lint. The next pinned Rust
+1.85 Kbuild is needed to verify the fix against the target toolchain.
 
 The standalone Kbuild object under `experimental/rust-poc/` remains a toolchain
 probe and is not the in-tree Nouveau component. Neither prototype is a DKMS

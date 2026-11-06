@@ -88,7 +88,10 @@ pub extern "C" fn gf117_rust_gt215_pll_calc(
         return failure(ERANGE);
     }
 
-    let Some(low_m_numerator) = (refclk as u64).checked_add(max_inputfreq as u64 - 1) else {
+    let Some(max_inputfreq_minus_one) = (max_inputfreq as u64).checked_sub(1) else {
+        return failure(ERANGE);
+    };
+    let Some(low_m_numerator) = (refclk as u64).checked_add(max_inputfreq_minus_one) else {
         return failure(ERANGE);
     };
     let Some(low_m_quotient) = low_m_numerator.checked_div(max_inputfreq as u64) else {
@@ -114,7 +117,12 @@ pub extern "C" fn gf117_rust_gt215_pll_calc(
     let mut best_m = 0i32;
 
     for m in low_m..=high_m {
-        let numerator = freq as u64 * p as u64 * m as u64;
+        let Some(numerator) = (freq as u64)
+            .checked_mul(p as u64)
+            .and_then(|value| value.checked_mul(m as u64))
+        else {
+            return failure(ERANGE);
+        };
         let Some(quotient) = numerator.checked_div(refclk as u64) else {
             return failure(ERANGE);
         };
@@ -132,13 +140,24 @@ pub extern "C" fn gf117_rust_gt215_pll_calc(
                 if n == i32::MAX {
                     return failure(ERANGE);
                 }
-                n += 1;
+                let Some(next_n) = n.checked_add(1) else {
+                    return failure(ERANGE);
+                };
+                n = next_n;
             }
         } else {
             if remainder < (refclk / 2) as u64 {
-                n -= 1;
+                let Some(previous_n) = n.checked_sub(1) else {
+                    return failure(ERANGE);
+                };
+                n = previous_n;
             }
-            let fractional = numerator as i64 - n as i64 * refclk as i64;
+            let Some(n_refclk) = (n as i64).checked_mul(refclk as i64) else {
+                return failure(ERANGE);
+            };
+            let Some(fractional) = (numerator as i64).checked_sub(n_refclk) else {
+                return failure(ERANGE);
+            };
             if fractional < i32::MIN as i64 || fractional > i32::MAX as i64 {
                 return failure(ERANGE);
             }
@@ -152,7 +171,10 @@ pub extern "C" fn gf117_rust_gt215_pll_calc(
             break;
         }
 
-        let Some(actual) = (refclk as u64 * n as u64)
+        let Some(refclk_n) = (refclk as u64).checked_mul(n as u64) else {
+            return failure(ERANGE);
+        };
+        let Some(actual) = refclk_n
             .checked_div(m as u64)
             .and_then(|actual| actual.checked_div(p as u64))
         else {
@@ -171,10 +193,16 @@ pub extern "C" fn gf117_rust_gt215_pll_calc(
 
         if fractional != 0 {
             // f_n is nonnegative on this branch, matching C's signed shift.
-            let scaled = (f_n as i64) * 8192 + refclk as i64 / 2;
+            let Some(scaled) = (f_n as i64)
+                .checked_mul(8192)
+                .and_then(|value| value.checked_add(refclk as i64 / 2))
+            else {
+                return failure(ERANGE);
+            };
             let Some(scaled_fraction) = scaled
                 .checked_div(refclk as i64)
-                .map(|scaled| (scaled - 4096) & 0xffff)
+                .and_then(|value| value.checked_sub(4096))
+                .map(|value| value & 0xffff)
             else {
                 return failure(ERANGE);
             };
@@ -194,7 +222,10 @@ pub extern "C" fn gf117_rust_gt215_pll_calc(
     if best_m == 0 || p == 0 {
         return failure(ERANGE);
     }
-    let Some(actual) = (refclk as u64 * best_n as u64)
+    let Some(refclk_n) = (refclk as u64).checked_mul(best_n as u64) else {
+        return failure(ERANGE);
+    };
+    let Some(actual) = refclk_n
         .checked_div(best_m as u64)
         .and_then(|actual| actual.checked_div(p as u64))
     else {
