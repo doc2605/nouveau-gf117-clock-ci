@@ -76,9 +76,8 @@ both Clang and GCC locally. The
 patch applies with zero fuzz to a synthetic post-0001 tree. Exact pinned
 7.2.9-2 module linkage and full-kernel compilation have passed on earlier
 commits. The added boundary cases passed against the available patched
-7.3 source; exact 7.2.9-2 execution of those cases is pending. The manifest
-checksum change from commit `7957cb4` is still being validated by run
-`42212595424`.
+7.3 source; exact 7.2.9-2 execution of those cases is pending in run
+`42216528135`.
 The standalone fractional branch is tested, but the real GF117 caller passes
 `fractional = 0`. No PLL change has been tested on GPU hardware or authorizes
 reclocking.
@@ -148,6 +147,18 @@ The downloaded ZIP passed `unzip -t` and its internal checks. Its compressed and
 uncompressed module hashes, kernel configuration, `Module.symvers`, and symbol
 listings match all three earlier builds.
 
+Run 42212595424 completed successfully at commit `7957cb4`. Its 28,219,856-byte
+artifact (ID 13501372552) matched GitHub's API digest
+`sha256:545660586c2b81bd91820e7d6175ef60e4e2bb58f1564d9ff5b047a2a699d7a1`.
+The downloaded archive passed `unzip -t`, and every entry in its internal
+`SHA256SUMS` passed verification, including the newly added
+`gf100-undefined.symbols` and `gf117-pll-undefined.symbols`. The decompressed
+module hash remains `d3cc32a0aaede4373f20933f201933bf3f0d24d8a9a950d1d9100c06277532bf`.
+
+Run 42216528135 on commit `5a5d31a` passed patch application and the expanded
+C/Rust host parity tests against the pinned 7.2.9-2 source. Its full Rust-enabled
+kernel build is still running; artifact checks remain pending.
+
 The complete ZIPs are not byte-identical: `build-info.txt` records different
 project commits, `kernel-build.log` differs between runner executions, and
 `SHA256SUMS` consequently differs. Thus four runs establish repeatable module
@@ -157,9 +168,9 @@ None tests module loading, runtime behavior, or hardware operation.
 
 Workflow commit `7957cb4` adds `gf100-undefined.symbols` and
 `gf117-pll-undefined.symbols` to the internal `SHA256SUMS` manifest. Earlier
-artifacts contain these diagnostic files, and their ZIP digests are verified
-externally, but their per-file checksums were omitted from the manifest. CI run
-`42212595424` is validating the revised manifest.
+artifacts contain these diagnostic files and their ZIP digests are verified
+externally, but their per-file checksums were omitted from the manifest. Run
+`42212595424` now verifies the complete internal manifest.
 
 The standalone Kbuild object under `experimental/rust-poc/` remains a toolchain
 probe and is not the in-tree Nouveau component. Neither prototype is a DKMS
