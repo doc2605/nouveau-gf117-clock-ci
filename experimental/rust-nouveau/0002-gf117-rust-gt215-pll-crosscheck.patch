@@ -87,7 +87,7 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs b/drivers/gpu/
 new file mode 100644
 --- /dev/null
 +++ b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,213 @@
 +// SPDX-License-Identifier: MIT
 +//! Pure scalar mirror of Nouveau's GT215 PLL candidate calculator.
 +//!
@@ -98,12 +98,18 @@ new file mode 100644
 +//! tests cover the exact kernel source and GF117 integration path.
 +#![cfg_attr(not(CONFIG_RUST), no_std)]
 +
++/// Fixed-layout result shared with Nouveau's C PLL planner.
 +#[repr(C)]
 +pub struct Gf117PllResult {
++    /// Achieved output frequency, or a negative errno on failure.
 +    pub ret: i32,
++    /// Integer feedback divider (N) selected by the PLL solver.
 +    pub n: i32,
++    /// Fractional feedback field; unused by the current GF117 C caller.
 +    pub f_n: i32,
++    /// Reference input divider (M) selected by the PLL solver.
 +    pub m: i32,
++    /// Output post-divider (P) selected by the PLL solver.
 +    pub p: i32,
 +}
 +

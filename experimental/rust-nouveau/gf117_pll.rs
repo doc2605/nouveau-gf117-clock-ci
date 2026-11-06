@@ -8,12 +8,18 @@
 //! tests cover the exact kernel source and GF117 integration path.
 #![cfg_attr(not(CONFIG_RUST), no_std)]
 
+/// Fixed-layout result shared with Nouveau's C PLL planner.
 #[repr(C)]
 pub struct Gf117PllResult {
+    /// Achieved output frequency, or a negative errno on failure.
     pub ret: i32,
+    /// Integer feedback divider (N) selected by the PLL solver.
     pub n: i32,
+    /// Fractional feedback field; unused by the current GF117 C caller.
     pub f_n: i32,
+    /// Reference input divider (M) selected by the PLL solver.
     pub m: i32,
+    /// Output post-divider (P) selected by the PLL solver.
     pub p: i32,
 }
 
