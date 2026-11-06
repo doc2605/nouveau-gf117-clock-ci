@@ -75,14 +75,16 @@ reclocking.
 The first pinned CI attempt, run 42176186321 on commit `6ad1929`, failed in
 the host differential link before the full kernel build. Rust 1.85 emitted an
 unresolved `core::panicking::panic_const_div_by_zero` reference for guarded
-division in the no-std object. The solver now uses checked division and
-remainder operations. Run 42176826186 on commit `07a4637` passed patch
-application and exact-source host tests; its Rust-enabled kernel build is
-still running. Expanded commit `150abac` adds the signed P-quotient parity fix,
-layout assertions, and production adapter/fallback host tests. Run 42179812950
-passed patch application and all host/source tests, and its full Kbuild stage
-is still running. Therefore the current solver and harness pass host checks,
-but exact pinned kernel linkage remains unverified until that stage completes.
+division in the no-std object. Run 42176826186 on commit `07a4637` passed
+patch application and exact-source host tests, then failed during kernel
+compilation because `-D missing-docs` rejected the public result struct and
+its fields. Expanded commit `150abac` added the signed P-quotient parity fix,
+layout assertions, and production adapter/fallback host tests; run 42179812950
+passed patch application and host/source tests and was canceled after the same
+lint failure was identified. Commit `ee7b337` documents the C ABI result and
+each field. Its fresh pinned build is run 42180904820; host parity tests pass
+locally, while exact pinned kernel linkage remains unverified until this
+workflow completes.
 
 The standalone Kbuild object under `experimental/rust-poc/` remains a toolchain
 probe and is not the in-tree Nouveau component. Neither prototype is a DKMS
