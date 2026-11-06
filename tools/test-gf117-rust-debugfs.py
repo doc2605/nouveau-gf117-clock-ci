@@ -9,6 +9,7 @@ import tempfile
 if len(sys.argv) != 3:
     raise SystemExit("usage: test-gf117-rust-debugfs.py <kernel-source> <rust-object>")
 source = Path(sys.argv[1]) / "drivers/gpu/drm/nouveau/nouveau_debugfs.c"
+volt_source = Path(sys.argv[1]) / "drivers/gpu/drm/nouveau/nvkm/subdev/volt/base.c"
 rust_object = Path(sys.argv[2])
 text = source.read_text()
 def extract_function(name):
@@ -37,6 +38,19 @@ assert "chipset == 0xd7" in callback
 assert "nouveau_debugfs_validate_voltage_plan(clk, &cstate)" in callback
 assert "voltage_plan_check" in callback
 assert "nvkm_wr32" not in callback and "nvkm_mask" not in callback
+
+volt_text = volt_source.read_text()
+map_start = volt_text.index("\nnvkm_volt_map(") + 1
+map_brace = volt_text.index("{", map_start)
+map_end = map_brace + 1
+depth = 1
+while depth:
+    depth += (volt_text[map_end] == "{") - (volt_text[map_end] == "}")
+    map_end += 1
+voltage_map = volt_text[map_start:map_end]
+assert "nvkm_rd32" not in voltage_map and "nvkm_wr32" not in voltage_map
+assert "nvkm_mask" not in voltage_map and "nvkm_volt_get" not in voltage_map
+assert "nvkm_volt_set_id" not in voltage_map
 
 stub = r'''
 #include <assert.h>
