@@ -29,13 +29,15 @@ typedef uint8_t u8;typedef uint32_t u32;
 #define min(a,b) ((a)<(b)?(a):(b))
 #define ARRAY_SIZE(a) (int)(sizeof(a)/sizeof((a)[0]))
 #include <limits.h>
-struct nvkm_volt { int uv,target,set_error; bool unreadable,stuck,readback_is_estimate; u32 max_uv; u8 max0_id,max1_id,max2_id,vid_nr;struct {u32 uv;} vid[4]; };
+struct nvkm_subdev { struct nvkm_device *device; };
+struct nvkm_volt;
+struct nvkm_volt_func { int (*vid_get)(struct nvkm_volt *); };
+struct nvkm_volt { struct nvkm_subdev subdev;const struct nvkm_volt_func *func;int uv,target,set_error; bool unreadable,stuck,readback_is_estimate; u32 max_uv; u8 max0_id,max1_id,max2_id,vid_nr;struct {u32 uv;} vid[4]; };
 struct nvkm_therm { int unused; };
 struct nvkm_clk;
 struct nvkm_cstate { int voltage; };
 struct nvkm_pstate { struct nvkm_cstate base; int list,fanspeed; };
 struct nvkm_device { int chipset; const char *cfgopt; struct nvkm_volt *volt; struct nvkm_therm *therm; };
-struct nvkm_subdev { struct nvkm_device *device; };
 struct nvkm_clk_func {
  int (*calc)(struct nvkm_clk *,struct nvkm_cstate *);
  int (*prog)(struct nvkm_clk *);
@@ -57,6 +59,10 @@ static int calc_error,prog_error;
 static int nvkm_therm_cstate(struct nvkm_therm *t,int f,int direction)
 { (void)t;(void)f;if(direction>0)fan_raise++;else fan_lower++;return 0; }
 static int nvkm_volt_get(struct nvkm_volt *v) { return v->unreadable?-ENODEV:v->uv; }
+static int nvkm_voltgpio_get(struct nvkm_volt *v) { (void)v;return 1; }
+static int nvkm_volt_other_get(struct nvkm_volt *v) { (void)v;return 1; }
+static const struct nvkm_volt_func gpio_volt_ops={.vid_get=nvkm_voltgpio_get};
+static const struct nvkm_volt_func other_volt_ops={.vid_get=nvkm_volt_other_get};
 static int nvkm_volt_map(struct nvkm_volt *v,int id,int temp) { (void)temp;if(id==42)return 950000;if(id==43)return -EIO;return v->target; }
 static int nvkm_volt_set_id(struct nvkm_volt *v,int id,int min,int temp,int direction)
 { (void)id;(void)min;(void)temp;if(direction>0)volt_raise++;else volt_lower++;
@@ -73,9 +79,13 @@ int main(void) {
  struct nvkm_volt volt={.uv=900000,.target=850000,.max_uv=1200000,.max0_id=0xff,.max1_id=0xff,.max2_id=0xff,.vid_nr=1,.vid={{1000000}}};
  struct nvkm_therm therm={0};
  struct nvkm_device dev={.chipset=0xd7,.volt=&volt,.therm=&therm};
+ volt.subdev.device=&dev;volt.func=&gpio_volt_ops;
  struct nvkm_clk_func ops={.calc=mock_calc,.prog=mock_prog,.tidy=mock_tidy};
  struct nvkm_clk clk={.subdev={.device=&dev},.func=&ops};
  struct nvkm_pstate state={.base={.voltage=17}};
+ assert(nvkm_cstate_prog(&clk,&state,0)==-EOPNOTSUPP && prog_calls==0 && calc_calls==0);
+ assert(volt.uv==900000 && fan_raise==0 && volt_raise==0);
+ volt.func=&other_volt_ops;
  assert(nvkm_cstate_prog(&clk,&state,0)==0 && prog_calls==1);
  assert(volt.uv==900000 && volt_lower==0 && fan_lower==0 && boost_queries==0);
  volt.readback_is_estimate=true;
@@ -112,7 +122,7 @@ int main(void) {
  volt.max_uv=1200000;volt.target=1000000;
  dev.chipset=0xe0;
  assert(nvkm_cstate_prog(&clk,&state,0)==0 && boost_queries==1);
- puts("ok: actual cstate path rejects missing/unreadable/insufficient voltage before clock writes");
+ puts("ok: actual cstate path rejects GF117 GPIO VID, missing/unreadable/insufficient voltage before clock writes");
  puts("ok: core-only retains boot voltage/cooling and raised voltage on calculation/PLL errors");
  return 0;
 }
@@ -189,3 +199,4 @@ with tempfile.TemporaryDirectory(prefix='gf117-core-test-') as d:
         subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fsanitize=undefined',
                         '-fno-sanitize-recover=all',str(c),*flags,'-o',str(exe)],check=True)
         subprocess.run([str(exe)],check=True)
+
