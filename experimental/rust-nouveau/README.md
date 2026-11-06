@@ -144,10 +144,11 @@ bytes for this pinned kernel, configuration, architecture and recorded
 toolchain, not identical workflow archives or a cross-toolchain guarantee.
 None tests module loading, runtime behavior, or hardware operation.
 
-The next workflow revision adds `gf100-undefined.symbols` and
+Workflow commit `7957cb4` adds `gf100-undefined.symbols` and
 `gf117-pll-undefined.symbols` to the internal `SHA256SUMS` manifest. Earlier
 artifacts contain these diagnostic files, and their ZIP digests are verified
-externally, but their per-file checksums were omitted from the manifest.
+externally, but their per-file checksums were omitted from the manifest. CI run
+`42212595424` is validating the revised manifest.
 
 The standalone Kbuild object under `experimental/rust-poc/` remains a toolchain
 probe and is not the in-tree Nouveau component. Neither prototype is a DKMS
