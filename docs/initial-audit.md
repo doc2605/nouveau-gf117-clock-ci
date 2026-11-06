@@ -92,6 +92,12 @@ compilação não são tratados como evidência de operação na GPU.
   `nouveau.ko` dentro de uma árvore de kernel completa. O caminho sustentado pela
   evidência atual é patch + build Kbuild do kernel fixado; anunciar o pacote como
   DKMS funcional seria prematuro.
+- A fronteira é importante: os dois objetos Rust entram no `nouveau.ko` existente
+  e são chamados de `gf100.c` e do debugfs interno. Um DKMS separado não injeta
+  objetos nesses call sites nem ganha acesso às estruturas privadas do NVKM.
+  Empacotar outra cópia chamada `nouveau.ko` exigiria substituir/coordenar o
+  módulo do kernel e acompanhar suas interfaces internas por kernel; isso é um
+  pacote de kernel customizado, não um pequeno complemento DKMS independente.
 - No ambiente de desenvolvimento consultado, o kernel em execução é
   `7.3.0-4-cachyos`, sem link `build` correspondente. Há árvores de headers para
   outros releases, mas a árvore 7.3.1 disponível expõe o `Kconfig` do Nouveau
