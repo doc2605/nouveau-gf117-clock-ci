@@ -50,17 +50,27 @@ some opt-in work. Rust does not parse VBIOS structs, access MMIO, or program
 registers. The `#[repr(C)]` result carries five fixed `i32` fields; the Rust
 function uses no pointers or `unsafe` blocks.
 
-The new differential harness compiles the actual C `gt215_pll_calc()` from the
+The differential harness compiles the actual C `gt215_pll_calc()` from the
 kernel source and compares return codes and successful coefficients against
-the Rust object for integer and fractional modes. Locally, it passed
-half-reference boundaries, 10,000 constrained tuples, and 50,000
-deterministic randomized parameter/frequency tuples in both modes, with C
-UndefinedBehaviorSanitizer enabled, against the available
-patched CachyOS 7.3 source subset. The patch is also applied with zero fuzz to
-a minimal synthetic post-0001 tree. Exact pinned 7.2.9-2 full-source
-application, module compilation, symbol linkage, and the production C call
-path remain pending remote CI. The cross-check has not been tested on GPU
-hardware and does not authorize reclocking.
+the Rust object for integer and fractional modes. It exercises half-reference
+ties, odd reference clocks, P quotient overflow/clamps, M/N bounds, zero and
+invalid values, nonzero fractional flags, 10,000 constrained tuples, and
+50,000 deterministic randomized tuples. It checks fixed result-struct layout
+and Rust zeroed error fields; C runs under UndefinedBehaviorSanitizer. The
+actual `calc_pll()` C function body is extracted, compiled, and executed in a
+host harness with stubbed VBIOS parsing and reference-clock helpers. This
+verifies the GF117 Rust path and non-GF117 C path without claiming a kernel
+runtime test. A second host binary injects a Rust mismatch and verifies the
+adapter retains the C coefficient. These tests passed against the available
+patched CachyOS 7.3 source subset after a test exposed C's signed-int
+conversion of an oversized P quotient; Rust now mirrors the Linux
+two's-complement result. The differential and adapter harnesses pass with
+both Clang and GCC locally. The
+patch applies with zero fuzz to a synthetic post-0001 tree. Exact pinned
+7.2.9-2 module linkage and full-kernel compilation remain pending remote CI.
+The standalone fractional branch is tested, but the real GF117 caller passes
+`fractional = 0`. No PLL change has been tested on GPU hardware or authorizes
+reclocking.
 
 The first pinned CI attempt, run 42176186321 on commit `6ad1929`, failed in
 the host differential link before the full kernel build. Rust 1.85 emitted an

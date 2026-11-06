@@ -87,7 +87,7 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs b/drivers/gpu/
 new file mode 100644
 --- /dev/null
 +++ b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,207 @@
 +// SPDX-License-Identifier: MIT
 +//! Pure scalar mirror of Nouveau's GT215 PLL candidate calculator.
 +//!
@@ -156,10 +156,18 @@ new file mode 100644
 +        return failure(ERANGE);
 +    }
 +
-+    let Some(mut p) = max_freq.checked_div(freq) else {
++    let Some(quotient) = max_freq.checked_div(freq) else {
 +        return failure(ERANGE);
 +    };
-+    p = p.min(max_p).max(min_p);
++    // C assigns this u32 quotient to signed int before clamping. Linux uses
++    // two's-complement signed integers; mirror that conversion for parity.
++    let mut p = quotient as i32;
++    if p > max_p as i32 {
++        p = max_p as i32;
++    }
++    if p < min_p as i32 {
++        p = min_p as i32;
++    }
 +    if p == 0 {
 +        return failure(ERANGE);
 +    }
@@ -259,7 +267,7 @@ new file mode 100644
 +                n,
 +                f_n: scaled_fraction as i32,
 +                m: m as i32,
-+                p: p as i32,
++                p,
 +            };
 +        }
 +    }
@@ -284,6 +292,6 @@ new file mode 100644
 +        n: best_n,
 +        f_n: 0,
 +        m: best_m,
-+        p: p as i32,
++        p,
 +    }
 +}

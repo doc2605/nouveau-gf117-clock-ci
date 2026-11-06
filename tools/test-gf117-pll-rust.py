@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Differential-test the pure Rust PLL candidate against Nouveau's C source."""
 import argparse
+import os
+import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -9,21 +12,40 @@ parser = argparse.ArgumentParser()
 parser.add_argument("source", type=Path, help="patched kernel source root")
 parser.add_argument("rust_object", type=Path, help="host-compiled Rust PLL object")
 args = parser.parse_args()
+cc = os.environ.get("CC", "cc")
 
 text = (args.source / "drivers/gpu/drm/nouveau/nvkm/subdev/clk/pllgt215.c").read_text()
-start = text.index("\ngt215_pll_calc(") + 1
+matches = list(re.finditer(r"(?m)^gt215_pll_calc\(", text))
+if len(matches) != 1:
+    raise SystemExit(f"expected one gt215_pll_calc definition, found {len(matches)}")
+start = matches[0].start()
+brace = text.index("{", start)
+end = brace + 1
+depth = 1
+while depth and end < len(text):
+    depth += (text[end] == "{") - (text[end] == "}")
+    end += 1
+if depth != 0:
+    raise SystemExit("could not find end of gt215_pll_calc definition")
 
 pll_rust_source = args.source / "drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs"
+calc_function = ""
 if pll_rust_source.exists():
     gf100 = (args.source / "drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c").read_text()
-    calc_start = gf100.index("\ncalc_pll(") + 1
+    calc_matches = list(re.finditer(r"(?m)^calc_pll\(", gf100))
+    if len(calc_matches) != 1:
+        raise SystemExit(f"expected one calc_pll definition, found {len(calc_matches)}")
+    calc_start = calc_matches[0].start()
     calc_brace = gf100.index("{", calc_start)
     calc_end = calc_brace + 1
     depth = 1
-    while depth:
+    while depth and calc_end < len(gf100):
         depth += (gf100[calc_end] == "{") - (gf100[calc_end] == "}")
         calc_end += 1
+    if depth != 0:
+        raise SystemExit("could not find end of calc_pll definition")
     calc = gf100[calc_start:calc_end]
+    calc_function = "static u32\n" + calc
     kbuild = (args.source / "drivers/gpu/drm/nouveau/Kbuild").read_text()
     kconfig = (args.source / "drivers/gpu/drm/nouveau/Kconfig").read_text()
     rust_text = pll_rust_source.read_text()
@@ -31,6 +53,7 @@ if pll_rust_source.exists():
     assert "nvkm/subdev/clk/gf117_pll.o" in kbuild
     assert "depends on DRM_NOUVEAU && RUST" in kconfig
     assert "subdev->device->chipset == 0xd7" in calc
+    assert "struct gf117_pll_result { int ret, n, f_n, m, p; };" in gf100
     assert "gf117_rust_gt215_pll_calc(" in calc
     assert "gt215_pll_calc(subdev, &limits, freq, &N, NULL, &M, &P)" in calc
     assert "GF117 Rust PLL mismatch; retaining C result" in calc
@@ -44,22 +67,35 @@ prefix = r"""
 #include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+_Static_assert(sizeof(int) == sizeof(int32_t), "kernel ABI int width");
 typedef uint8_t u8; typedef uint32_t u32; typedef uint64_t u64; typedef int64_t s64;
-struct nvkm_subdev { int unused; };
+struct nvkm_bios;
+struct nvkm_device { struct nvkm_bios *bios; int chipset; };
+struct nvkm_subdev { struct nvkm_device *device; };
 struct nvbios_pll {
     u32 refclk; u8 min_p, max_p;
     struct { u32 max_freq, min_inputfreq, max_inputfreq;
              u8 min_m, max_m, min_n, max_n; } vco1;
 };
+struct nvkm_bios { struct nvbios_pll limits; };
+struct nvkm_clk { struct nvkm_subdev subdev; };
+struct gf100_clk { struct nvkm_clk base; };
 #define max(a,b) ((a)>(b)?(a):(b))
 #define min(a,b) ((a)<(b)?(a):(b))
 #define div_u64(n,d) ((n)/(d))
 #define unlikely(x) (x)
 #define nvkm_error(...) ((void)(subdev))
 struct gf117_pll_result { int32_t ret, n, f_n, m, p; };
+_Static_assert(sizeof(struct gf117_pll_result) == 5 * sizeof(int32_t), "PLL result size");
+_Static_assert(_Alignof(struct gf117_pll_result) == _Alignof(int32_t), "PLL result alignment");
+_Static_assert(offsetof(struct gf117_pll_result, n) == 4, "PLL N offset");
+_Static_assert(offsetof(struct gf117_pll_result, f_n) == 8, "PLL fN offset");
+_Static_assert(offsetof(struct gf117_pll_result, m) == 12, "PLL M offset");
+_Static_assert(offsetof(struct gf117_pll_result, p) == 16, "PLL P offset");
 extern struct gf117_pll_result gf117_rust_gt215_pll_calc(
     uint32_t refclk, uint32_t max_freq, uint32_t min_inputfreq,
     uint32_t max_inputfreq, uint32_t min_m, uint32_t max_m,
@@ -98,6 +134,10 @@ static void compare_case(struct nvkm_subdev *sd, struct nvbios_pll *i, u32 freq,
                 n, f_n, m, p, r.n, r.f_n, r.m, r.p);
         abort();
     }
+    if (c_ret <= 0 && (r.n != 0 || r.f_n != 0 || r.m != 0 || r.p != 0)) {
+        fprintf(stderr, "Rust error result did not zero coefficient fields\n");
+        abort();
+    }
     ++*count;
 }
 
@@ -118,6 +158,26 @@ int main(void)
 
     compare_case(&sd, &i, 775000, 0, &count);
     compare_case(&sd, &i, 775000, 1, &count);
+    i.refclk = 1;
+    i.vco1.max_freq = UINT32_MAX;
+    i.vco1.min_inputfreq = 1;
+    i.vco1.max_inputfreq = 1;
+    i.vco1.min_m = i.vco1.max_m = 1;
+    i.vco1.min_n = 1;
+    i.vco1.max_n = 255;
+    i.min_p = 1;
+    i.max_p = 8;
+    compare_case(&sd, &i, 1, 0, &count);
+    compare_case(&sd, &i, 1, 1, &count);
+    i.vco1.max_freq = 100;
+    i.min_p = 1;
+    i.max_p = 4;
+    compare_case(&sd, &i, 1, 0, &count);
+    i.vco1.max_freq = 1;
+    i.min_p = 2;
+    i.max_p = 4;
+    compare_case(&sd, &i, 2, 0, &count);
+
     i.refclk = 1000;
     i.vco1.max_freq = 16501;
     i.vco1.min_inputfreq = 1000;
@@ -132,6 +192,38 @@ int main(void)
     compare_case(&sd, &i, 16499, 1, &count);
     compare_case(&sd, &i, 16500, 1, &count);
     compare_case(&sd, &i, 16501, 1, &count);
+    compare_case(&sd, &i, 16500, 2, &count);
+    compare_case(&sd, &i, 16500, UINT32_MAX, &count);
+    i.vco1.max_freq = 16000;
+    i.vco1.min_n = i.vco1.max_n = 16;
+    compare_case(&sd, &i, 16000, 0, &count);
+    i.vco1.max_freq = 17500;
+    compare_case(&sd, &i, 17500, 0, &count);
+    i.vco1.max_freq = UINT32_MAX;
+    i.vco1.min_n = 1;
+    i.vco1.max_n = 255;
+    i.min_p = 2;
+    i.max_p = 4;
+    compare_case(&sd, &i, 16000, 0, &count);
+
+    i.refclk = 1001;
+    i.vco1.max_freq = 16517;
+    i.vco1.min_inputfreq = i.vco1.max_inputfreq = 1001;
+    i.min_p = i.max_p = 1;
+    compare_case(&sd, &i, 16516, 0, &count);
+    compare_case(&sd, &i, 16516, 1, &count);
+
+    i.refclk = 27000;
+    i.vco1.min_inputfreq = 100000;
+    i.vco1.max_inputfreq = 200000;
+    i.vco1.min_m = 1;
+    i.vco1.max_m = 8;
+    i.vco1.min_n = 16;
+    i.vco1.max_n = 255;
+    i.min_p = 1;
+    i.max_p = 8;
+    compare_case(&sd, &i, 775000, 0, &count);
+    compare_case(&sd, &i, 775000, 1, &count);
 
     for (unsigned int x = 0; x < 10000; ++x) {
         i.refclk = 10000 + next_u32() % 1000000;
@@ -185,13 +277,131 @@ int main(void)
 }
 """
 
+adapter_helpers = r"""
+static int nvbios_pll_parse(struct nvkm_bios *bios, u32 reg,
+                            struct nvbios_pll *limits)
+{
+    (void)reg;
+    *limits = bios->limits;
+    return 0;
+}
+static u32 read_div(struct gf100_clk *clk, int idx, u32 reg1, u32 reg2)
+{
+    (void)idx; (void)reg1; (void)reg2;
+    return clk->base.subdev.device->bios->limits.refclk;
+}
+"""
+
+production_adapter_test = r"""
+static void test_production_adapter(void)
+{
+    struct nvkm_bios bios = { .limits = {
+        .refclk = 27000, .min_p = 1, .max_p = 8,
+        .vco1 = { .max_freq = 1200000, .min_inputfreq = 10000,
+                  .max_inputfreq = 27000, .min_m = 1, .max_m = 8,
+                  .min_n = 16, .max_n = 255 }
+    } };
+    struct nvkm_device device = { .bios = &bios, .chipset = 0xd7 };
+    struct gf100_clk clk = { .base = { .subdev = { .device = &device } } };
+    int n, m, p;
+    u32 expected_coef = 0, coef = 0;
+    int expected = gt215_pll_calc(&clk.base.subdev, &bios.limits, 775000,
+                                  &n, NULL, &m, &p);
+    expected_coef = (p << 16) | (n << 8) | m;
+    assert(calc_pll(&clk, 0, 775000, &coef) == expected);
+    assert(coef == expected_coef);
+    puts("PASS: production GF117 PLL adapter accepts the matching Rust result");
+
+    device.chipset = 0x50;
+    coef = 0;
+    assert(calc_pll(&clk, 0, 775000, &coef) == expected);
+    assert(coef == expected_coef);
+}
+"""
+
+fallback_adapter_test = r"""
+static int rust_calls;
+struct gf117_pll_result gf117_rust_gt215_pll_calc(
+    uint32_t refclk, uint32_t max_freq, uint32_t min_inputfreq,
+    uint32_t max_inputfreq, uint32_t min_m, uint32_t max_m,
+    uint32_t min_n, uint32_t max_n, uint32_t min_p, uint32_t max_p,
+    uint32_t freq, uint32_t fractional)
+{
+    (void)refclk; (void)max_freq; (void)min_inputfreq; (void)max_inputfreq;
+    (void)min_m; (void)max_m; (void)min_n; (void)max_n; (void)min_p;
+    (void)max_p; (void)freq; (void)fractional;
+    ++rust_calls;
+    return (struct gf117_pll_result){ .ret = -1, .n = 99, .m = 99, .p = 99 };
+}
+
+int main(void)
+{
+    struct nvkm_bios bios = { .limits = {
+        .refclk = 27000, .min_p = 1, .max_p = 8,
+        .vco1 = { .max_freq = 1200000, .min_inputfreq = 10000,
+                  .max_inputfreq = 27000, .min_m = 1, .max_m = 8,
+                  .min_n = 16, .max_n = 255 }
+    } };
+    struct nvkm_device device = { .bios = &bios, .chipset = 0xd7 };
+    struct gf100_clk clk = { .base = { .subdev = { .device = &device } } };
+    int n, m, p;
+    u32 expected_coef, coef = 0;
+    int expected = gt215_pll_calc(&clk.base.subdev, &bios.limits, 775000,
+                                  &n, NULL, &m, &p);
+    expected_coef = (p << 16) | (n << 8) | m;
+    assert(calc_pll(&clk, 0, 775000, &coef) == expected);
+    assert(coef == expected_coef);
+    assert(rust_calls == 1);
+    puts("PASS: production GF117 PLL adapter keeps the C result when Rust disagrees");
+
+    device.chipset = 0x50;
+    coef = 0;
+    assert(calc_pll(&clk, 0, 775000, &coef) == expected);
+    assert(coef == expected_coef);
+    assert(rust_calls == 1);
+}
+"""
+
 with tempfile.TemporaryDirectory(prefix="gf117-pll-rust-") as temp:
+    def run_test(binary: Path) -> None:
+        result = subprocess.run([str(binary)], check=False, capture_output=True, text=True)
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
+        result.check_returncode()
+
     cfile = Path(temp) / "test.c"
     binary = Path(temp) / "test"
-    cfile.write_text(prefix + "int\n" + text[start:] + main)
+    differential_main = main
+    c_source = prefix + "int\n" + text[start:end]
+    cflags = []
+    if calc_function:
+        c_source += adapter_helpers + calc_function
+        cflags.append("-DCONFIG_DRM_NOUVEAU_GF117_RUST_GUARD")
+        differential_main = differential_main.replace(
+            '    puts("PASS: Rust GT215 PLL matches Nouveau C',
+            '    test_production_adapter();\n    puts("PASS: Rust GT215 PLL matches Nouveau C',
+        )
+        c_source += production_adapter_test
+    cfile.write_text(c_source + differential_main)
     subprocess.run([
-        "cc", "-std=gnu11", "-Wall", "-Wextra", "-Werror",
+        cc, "-std=gnu11", "-Wall", "-Wextra", "-Werror",
+        *cflags,
         "-Wno-sign-compare", "-fsanitize=undefined", "-fno-sanitize-recover=all",
         str(cfile), str(args.rust_object), "-o", str(binary),
     ], check=True)
-    subprocess.run([str(binary)], check=True)
+    run_test(binary)
+
+    if calc_function:
+        fallback = Path(temp) / "fallback.c"
+        fallback_binary = Path(temp) / "fallback"
+        fallback.write_text(prefix + "int\n" + text[start:end] + adapter_helpers
+                            + calc_function + fallback_adapter_test)
+        subprocess.run([
+            cc, "-std=gnu11", "-Wall", "-Wextra", "-Werror",
+            "-DCONFIG_DRM_NOUVEAU_GF117_RUST_GUARD",
+            "-Wno-sign-compare", "-fsanitize=undefined", "-fno-sanitize-recover=all",
+            str(fallback), "-o", str(fallback_binary),
+        ], check=True)
+        run_test(fallback_binary)

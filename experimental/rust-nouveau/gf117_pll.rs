@@ -66,10 +66,18 @@ pub extern "C" fn gf117_rust_gt215_pll_calc(
         return failure(ERANGE);
     }
 
-    let Some(mut p) = max_freq.checked_div(freq) else {
+    let Some(quotient) = max_freq.checked_div(freq) else {
         return failure(ERANGE);
     };
-    p = p.min(max_p).max(min_p);
+    // C assigns this u32 quotient to signed int before clamping. Linux uses
+    // two's-complement signed integers; mirror that conversion for parity.
+    let mut p = quotient as i32;
+    if p > max_p as i32 {
+        p = max_p as i32;
+    }
+    if p < min_p as i32 {
+        p = min_p as i32;
+    }
     if p == 0 {
         return failure(ERANGE);
     }
@@ -169,7 +177,7 @@ pub extern "C" fn gf117_rust_gt215_pll_calc(
                 n,
                 f_n: scaled_fraction as i32,
                 m: m as i32,
-                p: p as i32,
+                p,
             };
         }
     }
@@ -194,6 +202,6 @@ pub extern "C" fn gf117_rust_gt215_pll_calc(
         n: best_n,
         f_n: 0,
         m: best_m,
-        p: p as i32,
+        p,
     }
 }
