@@ -15,6 +15,29 @@ verified separately. Successful compilation does not establish ABI, hardware
 or Secure Boot compatibility. The voltage readback remains an estimate of a
 PWM command, not a physical rail measurement.
 
+## Current build evidence (2026-11-06)
+
+The [7.2.9-2 build-only run](https://github.com/doc2605/nouveau-gf117-clock-ci/actions/runs/42164791436)
+completed successfully using DKMS `3.2.2-1ubuntu1` in an isolated CI
+container. The workflow ran `dkms add` and `dkms build`, verified the
+install tree stayed empty, and produced `nouveau.ko.zst`. Artifact
+`13478728568` expires 2026-11-13; ZIP SHA-256:
+`d144308b5f06fcc8e0834e945be557a45c04af3624d7b1407f762360f34d61ca`.
+The uncompressed module SHA-256 is
+`ca105cb01496acbb1a3530ab1269e0bfe8a8624775103426dca382713ba3b28`;
+its vermagic is `7.2.9-2-cachyos SMP preempt mod_unload`. The log reports
+that no isolated `sign-file` was available, so the module is unsigned, and
+notes compiler and pahole version differences. This is exact-ABI build
+evidence only.
+
+A separate external-module workflow built for
+[`7.3.0-4-cachyos`](https://github.com/doc2605/nouveau-gf117-clock-ci/actions/runs/42164770902)
+without DKMS installation. Artifact `13478029616` expires 2026-11-20; ZIP
+SHA-256:
+`3125a3c0189292aab9adf804bf056f2ee3a1d19f9b23bd76db4783d78e0a086e`.
+This is a distinct source-port/build path, not evidence that the DKMS package
+supports 7.3.
+
 ## Isolated collision experiment
 
 `tests/test-collision-dkms-3.1.7.py` runs the pinned upstream DKMS script
@@ -26,7 +49,8 @@ isolated `updates/dkms` tree, and that a simple uninstall restores the original.
 This exercises DKMS install/uninstall logic on fixture files only; it is not an
 installation or rollback test on the host, a kernel build, or a hardware test.
 The harness places a `depmod` stub first in `PATH`, so DKMS cannot update host
-module dependency files.
+module dependency files. The collision fixture uses DKMS v3.1.7; the remote
+build-only CI above uses v3.2.2, and no real-module installation is attempted.
 
 Reproduce on a Linux host with `unshare` user namespaces enabled:
 
