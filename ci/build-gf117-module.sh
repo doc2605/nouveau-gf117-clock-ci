@@ -28,6 +28,7 @@ for test in core ram vga crtc worker pll; do
 done
 python3 tools/test-gf117-pwm-probe.py "$src"
 python3 tools/test-gf117-pwm-voltage.py "$src"
+python3 tools/test-gf117-hwmon-voltage.py "$src"
 python3 tools/test-gf117-core-helper.py
 bash -n tools/test-gf117-core-once.sh
 make -C "$repo/work/build" LLVM=1 LLVM_IAS=1 -j"$(nproc)" \

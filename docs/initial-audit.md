@@ -144,10 +144,10 @@ compilação não são tratados como evidência de operação na GPU.
 - `--apply` permanece bloqueado. É um teste físico que escreve estado de clock;
   não será liberado por um build verde sozinho. Ainda requer autorização
   explícita e revisão do artefato exato antes de qualquer execução.
-- A CI de segurança ainda precisa ser executada sobre estas alterações. As
-  verificações locais passaram para `git diff --check`, sintaxe Bash e o teste
-  hermético do helper/verificador; isto não comprova compilação do módulo nem
-  comportamento na GPU.
+- O workflow de módulo compila contra os headers e a fonte exatos fixados, e a
+  execução de 2026-11-06 está registrada nos runs descritos adiante. O teste
+  hermético do helper/verificador passou localmente; isso não comprova
+  comportamento físico na GPU.
 - Não foi feita instalação, alteração de initramfs, carregamento do módulo Rust,
   escrita de registradores, mudança de clocks/tensão/PWM, ou teste físico nesta
   auditoria. O estado e limites da investigação estática estão em
