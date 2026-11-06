@@ -1,19 +1,33 @@
 #!/usr/bin/env python3
 """Exercise helper journal/clock parsing with fixtures, never execute --apply."""
 from pathlib import Path
+import hashlib
+import json
 import subprocess
 import tempfile
 s=Path(__file__).with_name('test-gf117-core-once.sh').read_text()
 apply_branch=s[s.index('    --apply)'):s.index('    *) echo "Argumento inválido')]
 assert '[[ $# == 1 ]] || exit 2' in apply_branch
-assert 'Teste de clock bloqueado antes de descarregar o driver' not in apply_branch
-assert s.index('    --apply)') < s.index('[[ $EUID == 0 ]]')
+assert 'apply_requested=1' in apply_branch
+apply_block=s.index('if (( apply_requested )); then')
+assert apply_block < s.index('[[ $EUID == 0 ]]')
+assert apply_block < s.index('rmmod nouveau')
+assert '--apply bloqueado:' in s[apply_block:s.index('[[ $EUID == 0 ]]')]
 assert '--probe-only|--apply' in s
-assert 'faults, tensão, temperatura e clocks são validados antes da escrita.' in s
 assert 'Uso: bash $0 --probe-only|--apply (execute como root)' in s
 assert 'Execute como root (ou invoque com sudo).' in s
-assert 'artifacts/github-actions/39024214497/gf117-nouveau-3126993b95ad4d8bc452c98bdc7e01252344eb46/nouveau.ko' in s
-assert '2021c4d279f0ad40412938a90d19f94f04fe2fe3c47a55a437cf7bf23dca6279' in s
+assert 'GF117_MODULE_PATH' in s and 'GF117_MODULE_SHA256' in s
+assert 'GF117_MODULE_MANIFEST' in s
+assert 'artifacts/gf117-module/nouveau.ko' in s
+assert 'expected_hash' in s
+assert 'verify-gf117-artifact.py' in s
+assert 'autorização explícita para teste físico de clock' in s
+assert '39024214497' not in s[apply_block:]
+build=Path(__file__).parents[1]/'ci/build-gf117-module.sh'
+build_text=build.read_text()
+assert '004[789]-*.patch' in build_text
+assert '0050-nouveau-gf117-vid-preflight-guard.patch' in build_text
+assert 'safety_patches=' in build_text and 'SHA256SUMS' in build_text
 probe_start=s.index('if (( probe_only )); then', s.index('plan=$(cat "$debugfs/pstate_plan")'))
 clock_request=s.index('clock_attempted=1', probe_start)
 apply_body=s[s.index('[[ "$plan" == allow_reclock=1* ]]'):clock_request]
@@ -184,3 +198,25 @@ with tempfile.TemporaryDirectory(prefix='gf117-helper-test-') as d:
     if r.returncode:
         raise RuntimeError(r.stdout+r.stderr)
     print(r.stdout.splitlines()[-1])
+
+verify=Path(__file__).with_name('verify-gf117-artifact.py')
+repo=Path(__file__).parents[1]
+def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+with tempfile.TemporaryDirectory(prefix='gf117-artifact-test-') as d:
+    root=Path(d)
+    module=root/'nouveau.ko';module.write_bytes(b'fixture module')
+    manifest=root/'manifest.json'
+    safety={p.name:sha(p) for p in sorted((repo/'experimental/rust-nouveau').glob('004[789]-*.patch'))}
+    safety['0050-nouveau-gf117-vid-preflight-guard.patch']=sha(repo/'experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch')
+    payload={'kernel':'7.2.9-2-cachyos','module_sha256':sha(module),'safety_patches':safety}
+    manifest.write_text(json.dumps(payload))
+    def check(expected, ok):
+        result=subprocess.run(['python3',str(verify),str(manifest),str(module),str(repo),expected],capture_output=True,text=True)
+        assert (result.returncode == 0) == ok, result.stdout+result.stderr
+    check(sha(module),True)
+    check('0'*64,False)
+    payload['safety_patches']['0050-nouveau-gf117-vid-preflight-guard.patch']='0'*64
+    manifest.write_text(json.dumps(payload));check(sha(module),False)
+    payload['safety_patches']=safety;payload['kernel']='wrong-kernel'
+    manifest.write_text(json.dumps(payload));check(sha(module),False)
+    print('ok: artifact verifier accepts matching manifest and rejects hash, guard, and kernel mismatches')

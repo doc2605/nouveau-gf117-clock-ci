@@ -2,24 +2,29 @@
 # Teste físico explícito GF117: carga temporária, sem instalar módulo.
 set -euo pipefail
 probe_only=0
+apply_requested=0
 case "${1:-}" in
     --help|-h|'')
         echo "Uso: bash $0 --probe-only|--apply (execute como root)"
         echo "--probe-only lê GPIO/PWM sem solicitar mudança de clock."
-        echo "--apply pede uma transição breve; faults, tensão, temperatura e clocks são validados antes da escrita."
+        echo "--apply exige artefato verificado e autorização explícita para teste físico de clock."
         echo "O módulo é trocado temporariamente; init/teardown ainda acessam MMIO."
         exit 0 ;;
     --probe-only) [[ $# == 1 ]] || exit 2; probe_only=1 ;;
-    --apply) [[ $# == 1 ]] || exit 2 ;;
+    --apply) [[ $# == 1 ]] || exit 2; apply_requested=1 ;;
     *) echo "Argumento inválido; use --help" >&2; exit 2 ;;
 esac
+if (( apply_requested )); then
+    echo "--apply bloqueado: este fluxo não tem autorização para executar um teste físico de clock." >&2
+    exit 2
+fi
 [[ $EUID == 0 ]] || { echo "Execute como root (ou invoque com sudo)." >&2; exit 2; }
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 caller_home=$(getent passwd "${SUDO_UID:-$(id -u)}" | cut -d: -f6)
 caller_home=${caller_home:-$HOME}
 repo_root=${GF117_REPO_ROOT:-}
 if [[ -z "$repo_root" ]]; then
-    if [[ -d "$script_dir/../artifacts" ]]; then
+    if [[ -d "$script_dir/../patches/nouveau" ]]; then
         repo_root=$(cd "$script_dir/.." && pwd)
     elif [[ -d "$caller_home/Nvidia-GT720M-Fix-atualizado/artifacts" ]]; then
         repo_root="$caller_home/Nvidia-GT720M-Fix-atualizado"
@@ -28,8 +33,9 @@ if [[ -z "$repo_root" ]]; then
         exit 1
     fi
 fi
-module="$repo_root/artifacts/github-actions/39024214497/gf117-nouveau-3126993b95ad4d8bc452c98bdc7e01252344eb46/nouveau.ko"
-expected_hash=2021c4d279f0ad40412938a90d19f94f04fe2fe3c47a55a437cf7bf23dca6279
+module=${GF117_MODULE_PATH:-"$repo_root/artifacts/gf117-module/nouveau.ko"}
+manifest=${GF117_MODULE_MANIFEST:-"$(dirname -- "$module")/manifest.json"}
+expected_hash=${GF117_MODULE_SHA256:-}
 device=/sys/bus/pci/devices/0000:08:00.0
 debugfs=/sys/kernel/debug/dri/0000:08:00.0
 hwmon_root=/sys/class/hwmon
@@ -297,13 +303,17 @@ trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for command in modinfo modprobe insmod rmmod sha256sum fuser timeout journalctl rg awk; do
+for command in modinfo modprobe insmod rmmod sha256sum fuser timeout journalctl rg awk python3; do
     command -v "$command" >/dev/null || { echo "Falta comando: $command" >&2; exit 1; }
 done
 [[ "$(uname -r)" == 7.2.9-2-cachyos ]] || { echo "Kernel diferente do build." >&2; exit 1; }
+[[ "$expected_hash" =~ ^[[:xdigit:]]{64}$ ]] || {
+    echo "Defina GF117_MODULE_SHA256 com o SHA-256 do módulo verificado no manifesto da CI." >&2
+    echo "O driver não foi descarregado." >&2; exit 1;
+}
 if [[ ! -r "$module" ]]; then
     echo "Módulo ausente ou ilegível: $module" >&2
-    echo "O driver não foi descarregado; gere/copie o artefato validado para esse caminho e tente novamente." >&2
+    echo "O driver não foi descarregado; copie o artefato indicado e tente novamente." >&2
     exit 1
 fi
 module_hash=$(sha256sum "$module" | awk '{print $1}')
@@ -312,12 +322,14 @@ echo "module=$module"
 echo "module_sha256=$module_hash expected_sha256=$expected_hash"
 echo "module_srcversion=$module_srcversion"
 if [[ "$module_hash" != "$expected_hash" ]]; then
-    echo "Hash divergente: o arquivo existe, mas não é o artefato validado." >&2
+    echo "Hash divergente: o módulo descompactado não é o artefato validado." >&2
     echo "Esperado: $expected_hash" >&2
     echo "Encontrado: $module_hash" >&2
     echo "O driver não foi descarregado; não substitua o módulo carregado." >&2
     exit 1
 fi
+python3 "$repo_root/tools/verify-gf117-artifact.py" \
+    "$manifest" "$module" "$repo_root" "$expected_hash"
 [[ "$module_srcversion" =~ ^[[:xdigit:]]{24}$ ]] || {
     echo "srcversion ausente ou inválido no artefato." >&2; exit 1;
 }

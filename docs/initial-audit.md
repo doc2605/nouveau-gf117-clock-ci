@@ -123,6 +123,30 @@ compilação não são tratados como evidência de operação na GPU.
   sem seu `Makefile`/`Kbuild` completo. Isso confirma que os headers instalados
   aqui não bastam para repetir a integração do Nouveau. É observação deste
   ambiente, não de todos os pacotes CachyOS.
+
+## Integridade do artefato de teste físico
+
+- A revisão de 2026-11-06 encontrou um pin antigo no helper físico para o run
+  `39024214497`. Esse módulo não contém os guards 0048/0050 e não deve ser usado
+  para um teste de clock. O helper não referencia mais esse artefato.
+- O workflow `gf117-module.yml` agora aplica os patches 0047–0050 e grava seus
+  hashes em `manifest.json`. `SHA256SUMS` cobre o módulo compactado, seu arquivo
+  `.sha256` e o manifesto; o log de build fica fora da lista porque a própria
+  verificação escreve nele.
+- Para `--probe-only`, o helper exige um `.ko` descompactado, o hash externo
+  informado em `GF117_MODULE_SHA256` e um manifesto ao lado (ou
+  `GF117_MODULE_MANIFEST`). `tools/verify-gf117-artifact.py` confere kernel,
+  hash do módulo e hashes locais dos patches de segurança. O artefato da CI é
+  publicado como `nouveau.ko.zst`; deve ser extraído para
+  `artifacts/gf117-module/nouveau.ko`, preservando `manifest.json` no mesmo
+  diretório. A origem do SHA deve ser o manifesto do artefato baixado/verificado.
+- `--apply` permanece bloqueado. É um teste físico que escreve estado de clock;
+  não será liberado por um build verde sozinho. Ainda requer autorização
+  explícita e revisão do artefato exato antes de qualquer execução.
+- A CI de segurança ainda precisa ser executada sobre estas alterações. As
+  verificações locais passaram para `git diff --check`, sintaxe Bash e o teste
+  hermético do helper/verificador; isto não comprova compilação do módulo nem
+  comportamento na GPU.
 - Não foi feita instalação, alteração de initramfs, carregamento do módulo Rust,
   escrita de registradores, mudança de clocks/tensão/PWM, ou teste físico nesta
   auditoria. O estado e limites da investigação estática estão em

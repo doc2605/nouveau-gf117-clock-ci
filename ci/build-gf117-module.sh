@@ -18,6 +18,11 @@ src="$repo/work/cachyos-7.2.9-2"
 for patch in "$repo"/patches/nouveau/*.patch; do
     patch --batch --fuzz=0 -d "$src" -p1 -i "$patch"
 done
+for patch in "$repo"/experimental/rust-nouveau/004[789]-*.patch; do
+    patch --batch --fuzz=0 -d "$src" -p1 -i "$patch"
+done
+patch --batch --fuzz=0 -d "$src" -p1 \
+    -i "$repo/experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch"
 for test in core ram vga crtc worker pll; do
     python3 "tools/test-gf117-$test-source.py" "$src"
 done
@@ -41,9 +46,14 @@ manifest=dict(kernel='7.2.9-2-cachyos',commit=os.environ.get('GITHUB_SHA'),
     symvers_sha256=sha(root/'work/build/Module.symvers'),
     compiler=subprocess.check_output(['clang','--version'],text=True).splitlines()[0],
     vermagic=subprocess.check_output(['modinfo','-F','vermagic',str(module)],text=True).strip(),
-    patches={p.name:sha(p) for p in sorted((root/'patches/nouveau').glob('*.patch'))})
+    patches={p.name:sha(p) for p in sorted((root/'patches/nouveau').glob('*.patch'))},
+    safety_patches={p.name:sha(p) for p in sorted(
+        list((root/'experimental/rust-nouveau').glob('004[789]-*.patch'))+
+        [root/'experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch'])})
 (root/'ci-output/manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print(json.dumps(manifest,indent=2))
 MANIFEST
 zstd -T0 -6 -o ci-output/nouveau.ko.zst "$module"
 sha256sum ci-output/nouveau.ko.zst > ci-output/nouveau.ko.zst.sha256
+(cd ci-output && sha256sum nouveau.ko.zst nouveau.ko.zst.sha256 manifest.json > SHA256SUMS)
+(cd ci-output && sha256sum -c SHA256SUMS)
