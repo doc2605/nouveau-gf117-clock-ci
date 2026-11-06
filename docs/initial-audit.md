@@ -64,14 +64,13 @@ compilação não são tratados como evidência de operação na GPU.
   migração de ownership/lifecycle PCI/NVKM para Rust. Nesta etapa experimental,
   Rust acrescenta novos objetos e não reduz ainda o total líquido de linhas C;
   a redução depende de migrar componentes após paridade e evidência de runtime.
-- Os runs `42187920923` e `42190675638` compilaram o módulo Rust-enabled no
-  kernel CachyOS fixado, com C/Rust linkados. Os bytes do módulo foram iguais
-  entre esses dois runs para a mesma árvore/configuração/toolchain registrada.
-  Isso não prova reprodutibilidade entre kernels/toolchains, carregamento,
-  execução em hardware, desempenho ou segurança de reclocking. O run
-  `42208371477`, para `c2e3ea2`, foi iniciado em 2026-11-06 e ainda estava em
-  andamento no momento desta consulta; verificar o resultado final antes de
-  atualizar o relatório.
+- Os runs `42187920923`, `42190675638`, `42208371477` e `42209101812`
+  compilaram o módulo Rust-enabled no kernel CachyOS fixado, com C/Rust
+  linkados. Os hashes do módulo, configuração e `Module.symvers` são iguais
+  entre os quatro runs. Os dois artefatos mais recentes tiveram ZIP íntegro,
+  digest externo igual ao informado pela API do GitHub e `SHA256SUMS` aprovado.
+  Isso não prova compatibilidade entre kernels/toolchains, carregamento,
+  execução em hardware, desempenho ou segurança de reclocking.
 - Os testes Rust/PLL reproduzem cálculos C e Rust em harness host e exercitam
   mismatch, limites, casos aleatórios e layout da ABI. São testes de lógica e
   integração de compilação; não são teste KUnit, load/unload ou operação da GPU.
@@ -109,11 +108,11 @@ compilação não são tratados como evidência de operação na GPU.
   auditoria. O estado e limites da investigação estática estão em
   [`docs/reverse-engineering/status.md`](reverse-engineering/status.md); não há
   análise do blob proprietário.
-- Próximos gates: confirmar o run `42208371477`; manter leitura PWM separada de
-  escrita e bloqueada quando a fonte não for independente; documentar suporte
-  de build por kernel; só avaliar um ciclo DKMS com os pacotes de headers
-  concretos; e reservar testes físicos para um procedimento explícito, reversível
-  e autorizado.
+- Próximos gates: validar em CI a nova cobertura de hashes para todos os arquivos
+  auxiliares de símbolos; manter leitura PWM separada de escrita e bloqueada
+  quando a fonte não for independente; documentar suporte de build por kernel;
+  só avaliar um ciclo DKMS com os pacotes de headers concretos; e reservar testes
+  físicos para um procedimento explícito, reversível e autorizado.
 
 ## Avaliação dos componentes candidatos a Rust
 
@@ -152,7 +151,7 @@ contando a mera adição de uma função Rust.
 | Fase | Estado observado | Evidência/pendência principal |
 | --- | --- | --- |
 | 1. Auditoria dos dois repositórios | Auditoria inicial documentada | Branches e workflows comparados; continuar atualizando por commit/branch. |
-| 2. Testes e CI | Parcialmente implementada | Harnesses host/source e workflow remoto pinned; builds atuais `42208371477` e `42209101812` ainda em execução. Não há matriz por versões/arquiteturas. |
+| 2. Testes e CI | Parcialmente implementada | Harnesses host/source e workflow remoto pinned; quatro builds Rust-enabled passaram e artefatos foram comparados. A matriz ainda cobre uma versão de kernel e x86_64. |
 | 3. Kernel moderno e DKMS | Estratégia escolhida; DKMS não comprovado | Integração Rust atual modifica árvore interna e requer Kbuild in-tree. Headers deste ambiente não contêm fonte/Kbuild completos do Nouveau. |
 | 4. Proteções e inicialização | Guards de fonte existem; hardware pendente | Patches GF117 adicionam fail-closed em caminhos específicos; ausência de teste físico impede afirmar correção global de init. |
 | 5. Sensores, PWM e tensão | Parcial e experimental | Diagnósticos e mocks existem; leitura GPIO/VID é tabela de comando, PWM GF117 segue controverso, sem medição de trilho confirmada. |

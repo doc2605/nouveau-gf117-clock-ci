@@ -110,10 +110,10 @@ Run 42190675638 rebuilt the same code at commit `ad38e53` in a separate GitHub
 Actions job with the same recorded kernel and compiler versions. Its artifact
 digest (`sha256:45fc6f5bdb267e87e7c5bc518b76b41a7640adc905ccdbd5d730a2b337404387`,
 ID 13491332165) also matched GitHub's API digest, and its internal
-`SHA256SUMS` checks passed. Comparing the two artifacts showed byte-identical
-compressed and uncompressed Nouveau modules:
+`SHA256SUMS` checks passed. The compressed and uncompressed Nouveau modules
+matched the first build byte for byte:
 
-| Output | SHA-256 in both runs |
+| Output | SHA-256 shared by all four runs |
 | --- | --- |
 | `nouveau-rust.ko.zst` | `f3decbd35e4ae5e8a861f78afa30002965bb6c6696cce463446d34d3a2c9253c` |
 | uncompressed `nouveau.ko` | `d3cc32a0aaede4373f20933f201933bf3f0d24d8a9a950d1d9100c06277532bf` |
@@ -121,12 +121,33 @@ compressed and uncompressed Nouveau modules:
 | `Module.symvers` | `8bff4c168e57002131fa0447a19a910e7f91048106a03dc5279407782e0e3500` |
 | `nouveau.symbols` | `ee0450498cbff9057a7c529ddba295ac5c99924d43701bd9cc441c1dac2abbe0` |
 
+Run 42208371477 independently rebuilt the same source at commit `c2e3ea2`.
+Its 28,219,777-byte artifact (ID 13499370863) matched GitHub's API digest
+`sha256:0b08b5dd40949368b4df300d9da7f74bab461c317221df46ce2bdd47143197a3`;
+the downloaded ZIP passed `unzip -t`, its internal `SHA256SUMS` passed, and the
+uncompressed module hash matched the previous two artifacts. The compressed
+module, config, `Module.symvers`, symbol listings and debugfs undefined-symbol
+listing are byte-identical across all three successful builds.
+
+Run 42209101812 rebuilt that same source at commit `62a1696` (the commit added
+only the repository audit document). Its 28,219,681-byte artifact (ID
+13500165502) matched GitHub's API digest
+`sha256:76abf6316a45229b1a4c4eda3d1ccddf3341272915f7a96fbee2aabb27033985`.
+The downloaded ZIP passed `unzip -t` and its internal checks. Its compressed and
+uncompressed module hashes, kernel configuration, `Module.symvers`, and symbol
+listings match all three earlier builds.
+
 The complete ZIPs are not byte-identical: `build-info.txt` records different
-project commits, and `kernel-build.log` differs between runner executions.
-Thus the two runs establish repeatable module bytes for this pinned kernel,
-configuration, and recorded toolchain, not identical workflow archives or a
-cross-toolchain guarantee. Neither run tests module loading, runtime behavior,
-or hardware operation.
+project commits, `kernel-build.log` differs between runner executions, and
+`SHA256SUMS` consequently differs. Thus four runs establish repeatable module
+bytes for this pinned kernel, configuration, architecture and recorded
+toolchain, not identical workflow archives or a cross-toolchain guarantee.
+None tests module loading, runtime behavior, or hardware operation.
+
+The next workflow revision adds `gf100-undefined.symbols` and
+`gf117-pll-undefined.symbols` to the internal `SHA256SUMS` manifest. Earlier
+artifacts contain these diagnostic files, and their ZIP digests are verified
+externally, but their per-file checksums were omitted from the manifest.
 
 The standalone Kbuild object under `experimental/rust-poc/` remains a toolchain
 probe and is not the in-tree Nouveau component. Neither prototype is a DKMS

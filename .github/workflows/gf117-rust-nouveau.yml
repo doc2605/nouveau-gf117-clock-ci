@@ -103,7 +103,7 @@ jobs:
           cp "$kernel/Module.symvers" ci-output/Module.symvers
           { printf 'project_commit=%s\nkernel_source_commit=%s\narch=%s\n' "$GITHUB_SHA" "$(git -C "$kernel" rev-parse HEAD)" "$(uname -m)"; rustc --version --verbose; bindgen --version; clang --version; modinfo -F vermagic "$module"; sha256sum "$kernel/Module.symvers" patches/nouveau/[0-9]*.patch experimental/rust-nouveau/0001-gf117-rust-voltage-plan-diagnostic.patch experimental/rust-nouveau/0002-gf117-rust-gt215-pll-crosscheck.patch experimental/rust-nouveau/gf117_pll.rs tools/test-gf117-pll-rust.py experimental/rust-nouveau/004[789]-*.patch experimental/rust-nouveau/0050-nouveau-gf117-vid-preflight-guard.patch; } > ci-output/build-info.txt
           zstd -T0 -6 -o ci-output/nouveau-rust.ko.zst "$module"
-          (cd ci-output && sha256sum nouveau-rust.ko.zst kernel.config Module.symvers nouveau.symbols debugfs-undefined.symbols build-info.txt kernel-build.log > SHA256SUMS)
+          (cd ci-output && sha256sum nouveau-rust.ko.zst kernel.config Module.symvers nouveau.symbols debugfs-undefined.symbols gf100-undefined.symbols gf117-pll-undefined.symbols build-info.txt kernel-build.log > SHA256SUMS)
           (cd ci-output && sha256sum -c SHA256SUMS)
       - name: Upload logs and experimental artifact
         if: always()
