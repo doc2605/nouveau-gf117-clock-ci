@@ -166,24 +166,24 @@ compilação não são tratados como evidência de operação na GPU.
 | Estados GF117 e gerenciamento de energia | Manter em C/NVKM | Envolve estado do dispositivo, worker, serialização e sequência de transição. A prova Rust atual não possui ownership nem callbacks de ciclo de vida. Primeiro exigir contrato de estado e testes dos caminhos de falha. |
 | Inicialização e desligamento | Manter em C/NVKM | A ordem e a liberação de recursos pertencem à integração existente do Nouveau. A abstração Rust PCI disponível não substitui a posse e o teardown de NVKM. |
 | Validação escalar de tensão | Rust no diagnóstico | `target_uv/min_uv/max_uv` são escalares; a validação Rust já está ligada ao `pstate_plan` read-only e comparada ao fallback C. Mapear VID/VBIOS e qualquer transição continuam em C. |
-| Cálculo PLL | Rust autoritativo para GF117, opt-in e experimental; build pinned aprovado | Rust calcula o candidato GF117 quando a opção está ativa; C continua para outros chips e builds com a opção desligada. O solver é escalar e não toca MMIO. O caminho de configuração/programação posterior ainda não tem teste físico. |
+| Cálculos PLL e divisor | PLL Rust autoritativo para GF117, opt-in e build pinned aprovado; `calc_div` Rust acrescentado localmente, aguardando CI pinned | Ambos recebem escalares e não acessam MMIO; `calc_div` preserva wrap `u32` do C. C continua para outros chips e builds com a opção desligada. Nenhum caminho de configuração/programação tem teste físico. |
 | Interpretação VBIOS | Manter parsing em C | Parsers Nouveau operam em estruturas e buffers com invariantes próprias. Extrair campos escalares em C para os validadores já existentes evita duplicar parser sem benefício de segurança comprovado. |
 | Controle e validação PWM | Manter hardware em C; adiar lógica Rust | O getter 0022 combina leitura de hardware, rota de GPIO/VBIOS, parâmetros PWM e limites. A série principal e branches posteriores divergem sobre se esse readback GF117 é confiável; o harness mock testa a lógica, não o significado físico dos registradores. Reabrir após evidência read-only no hardware e manter leitura distinta de escrita. |
 | Diagnóstico e estados de erro | Rust para lógica pura, C para integração | O validador de plano já demonstra a fronteira pequena. Debugfs, logs, locks e propagação a subsistemas continuam sob controle do Nouveau em C. |
 
-Assim, a promoção atual se restringe à aritmética pura do PLL GF117, depois da
-paridade diferencial contra o C patched e de build/artefato pinned validados. O
-próximo avanço depende de validar novos kernels e integrar mais lógica segura.
-A evidência não justifica
-mover sequências MMIO, parser de BIOS, worker, ciclo de vida PCI/NVKM ou PWM
-para Rust.
+O PLL GF117 já usa a aritmética Rust após paridade diferencial contra o C
+patched e build/artefato pinned validados. O helper `calc_div` recém-integrado
+passou o harness host contra o C do kernel fixado, mas ainda precisa de build e
+artefato CI pinned para ser considerado validado nessa árvore. O avanço segue
+restrito à aritmética pura; a evidência não justifica mover sequências MMIO,
+parser de BIOS, worker, ciclo de vida PCI/NVKM ou PWM para Rust.
 
 ## Comparação da estratégia híbrida atual
 
 | Critério | Evidência atual | Limite atual |
 | --- | --- | --- |
 | Segurança de memória | Funções Rust atuais recebem escalares e não usam `unsafe`, ponteiros ou alocação. | Segurança de memória da aritmética não comprova segurança elétrica ou de sequência de hardware. |
-| Manutenção | Harness compara aritmética C/Rust e testa que GF117 usa Rust, chips não GF117 usam C e builds C-only mantêm o solver. Kconfig mantém Rust opt-in. | A declaração C e o tipo `#[repr(C)]` precisam continuar sincronizados; solver C segue necessário fora do GF117. |
+| Manutenção | Harnesses comparam PLL e divisor C/Rust; o novo divisor verifica despacho GF117, fallback de chips não GF117 e compilação C-only. Kconfig mantém Rust opt-in. | A declaração C e os tipos `#[repr(C)]` precisam continuar sincronizados; implementações C seguem necessárias fora do GF117 e sem Rust. |
 | Compatibilidade | Build remoto pinado passou previamente em CachyOS 7.2.9-2, x86_64, Rust 1.85, bindgen 0.71.1 e Clang/LLVM. | Um kernel, arquitetura e toolchain não cobrem outras versões. Build não usa headers DKMS instalados. |
 | Desempenho | PLL é cálculo escalar e sem I/O; na rota GF117 usa-se um cálculo. | Não há benchmark; nenhum custo de execução em hardware foi medido. |
 | Custo de integração | Dois objetos entram no módulo existente; Kconfig depende de `RUST`, desativado por padrão; build remoto prepara a toolchain. | Requer árvore de kernel completa e patches na fonte Nouveau; não é um pequeno módulo DKMS independente. |
@@ -202,7 +202,7 @@ específico do projeto, sem retirar suporte C necessário.
 | 3. Kernel moderno e DKMS | Estratégia escolhida; DKMS não comprovado | Integração Rust atual modifica árvore interna e requer Kbuild in-tree. Headers deste ambiente não contêm fonte/Kbuild completos do Nouveau. |
 | 4. Proteções e inicialização | Guards de fonte existem; hardware pendente | Patches GF117 adicionam fail-closed em caminhos específicos; ausência de teste físico impede afirmar correção global de init. |
 | 5. Sensores, PWM e tensão | Parcial e experimental | Diagnósticos e mocks existem; leitura GPIO/VID é tabela de comando, PWM GF117 segue controverso, sem medição de trilho confirmada. |
-| 6. Gerenciamento de energia e clocks | Cálculos/documentação, sem RE proprietário | PLL tem paridade C/Rust host e rota Rust opt-in para GF117, compilada no kernel pinned; não há validação de execução em hardware. Análise do blob 390.157 não foi feita devido à restrição da licença. |
+| 6. Gerenciamento de energia e clocks | Cálculos/documentação, sem RE proprietário | PLL tem build Rust pinned; `calc_div` tem paridade C/Rust host, aguardando build pinned. Nenhum tem validação de execução em hardware. Análise do blob 390.157 não foi feita devido à restrição da licença. |
 | 7. Reclocking | Experimental, sem promoção física | Código tem guards e preflight, mas não há validação de estabilidade/rollback em GPU. Nenhuma escrita foi executada. |
 | 8. Testes físicos GT 720M | Não realizados nesta etapa | Exigem equipamento/ambiente adequados e autorização explícita para ações que alterem estado. |
 | 9. Empacotamento e instalação | Documentação experimental; pacote ausente | Não há entrega DKMS funcional, instruções de instalação validadas ou compatibilidade de pacote por kernel. |
@@ -212,7 +212,9 @@ demonstrados em várias execuções pinned do caminho anterior. O build pinned
 `42220548739` também valida a promoção da rota de cálculo PLL GF117 a Rust
 quando a opção Kconfig está ativa. Isso não
 representa um driver GF117 instalável ou validado em hardware, e não reduz
-ainda o total líquido de C específico do projeto.
+ainda o total líquido de C específico do projeto. Esse build antecede o helper
+Rust `calc_div` deste checkout; a compilação e o artefato desse helper ainda
+dependem de uma nova execução pinned.
 
 ## Referências oficiais de build Rust
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Scalar implementation used for GF117's GT215-style PLL candidates.
+//! Scalar clock calculations used by GF117's GF100-family planner.
 //!
 //! Inputs come from the C-owned VBIOS PLL limits. The function does no MMIO,
 //! allocation, pointer access, logging, or register programming. Results are
@@ -21,6 +21,34 @@ pub struct Gf117PllResult {
     pub m: i32,
     /// Output post-divider (P) selected by the PLL solver.
     pub p: i32,
+}
+
+/// Divider result shared with the GF100-family C clock planner.
+#[repr(C)]
+pub struct Gf117DivResult {
+    /// Output clock after applying the selected divider.
+    pub freq: u32,
+    /// Hardware divider field, encoded as the divisor minus two.
+    pub ddiv: u32,
+}
+
+/// Calculate the nearest GF100-family divider using C-compatible u32 wrapping.
+///
+/// The caller supplies the reference clock obtained through Nouveau's C/MMIO
+/// path. A zero requested frequency is rejected with a zero result; the
+/// production `calc_clk()` path already filters this input before calling.
+#[no_mangle]
+pub extern "C" fn gf117_rust_calc_div(refclk: u32, freq: u32) -> Gf117DivResult {
+    if freq == 0 {
+        return Gf117DivResult { freq: 0, ddiv: 0 };
+    }
+
+    let twice_refclk = refclk.wrapping_mul(2);
+    let div = (twice_refclk / freq).min(65).max(2);
+    Gf117DivResult {
+        freq: twice_refclk / div,
+        ddiv: div - 2,
+    }
 }
 
 const EINVAL: i32 = -22;

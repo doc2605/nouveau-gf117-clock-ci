@@ -1,9 +1,9 @@
 From: Nouveau GF117 contributors
-Subject: [PATCH] nouveau: use Rust PLL candidates for GF117
+Subject: [PATCH] nouveau: use Rust PLL and divider calculations for GF117
 
-Use pure scalar Rust PLL arithmetic for GF117 when the opt-in Kconfig
-setting is enabled. Other chipsets and builds without the option retain
-the existing C calculation. This path adds no MMIO or register writes.
+Use pure scalar Rust PLL and divider arithmetic for GF117 when the opt-in
+Kconfig setting is enabled. Other chipsets and builds without the option
+retain the existing C calculation. This path adds no MMIO or register writes.
 
 diff --git a/drivers/gpu/drm/nouveau/Kbuild b/drivers/gpu/drm/nouveau/Kbuild
 index 7ec7726..ae46409 100644
@@ -26,7 +26,7 @@ index 5e3e154..08462a3 100644
  
  config DRM_NOUVEAU_GF117_RUST_GUARD
 -	bool "Experimental Rust GF117 voltage-plan diagnostic"
-+	bool "Experimental Rust GF117 diagnostics and PLL calculation"
++	bool "Experimental Rust GF117 diagnostics and clock calculations"
  	depends on DRM_NOUVEAU && RUST
  	default n
  	help
@@ -35,12 +35,45 @@ index 5e3e154..08462a3 100644
 -	  debugfs diagnostic. This does not measure physical voltage or authorize
 -	  clock changes. This option is experimental and not hardware-validated.
 +	  Enable Rust validation for read-only diagnostics and use Rust to calculate
-+	  GF117 PLL candidates. Other chipsets use the existing C calculation. Rust
-+	  performs no MMIO; this option is experimental and not hardware-validated.
++	  GF117 PLL candidates and clock dividers. Other chipsets use the existing C
++	  calculation. Rust performs no MMIO; this option is experimental.
 diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c
-index 163c1b2..8f8d90a 100644
 --- a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c
 +++ b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf100.c
+@@ -210,10 +210,23 @@
++#ifdef CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD
++struct gf117_div_result { u32 freq, ddiv; };
++extern struct gf117_div_result
++gf117_rust_calc_div(u32 refclk, u32 freq);
++#endif
+-static u32
+-calc_div(struct gf100_clk *clk, int idx, u32 ref, u32 freq, u32 *ddiv)
+-{
+-	u32 div = min((ref * 2) / freq, (u32)65);
+-	if (div < 2)
+-		div = 2;
+-
+-	*ddiv = div - 2;
+-	return (ref * 2) / div;
+-}
++static u32
++calc_div(struct gf100_clk *clk, int idx, u32 ref, u32 freq, u32 *ddiv)
++{
++	u32 div;
++#ifdef CONFIG_DRM_NOUVEAU_GF117_RUST_GUARD
++	if (clk->base.subdev.device->chipset == 0xd7) {
++		struct gf117_div_result rust = gf117_rust_calc_div(ref, freq);
++		*ddiv = rust.ddiv;
++		return rust.freq;
++	}
++#endif
++	div = min((ref * 2) / freq, (u32)65);
++	if (div < 2)
++		div = 2;
++
++	*ddiv = div - 2;
++	return (ref * 2) / div;
++}
 @@ -246,6 +246,15 @@ calc_src(struct gf100_clk *clk, int idx, u32 freq, u32 *dsrc, u32 *ddiv)
  	return sclk;
  }
@@ -85,9 +118,9 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs b/drivers/gpu/
 new file mode 100644
 --- /dev/null
 +++ b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/gf117_pll.rs
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,272 @@
 +// SPDX-License-Identifier: MIT
-+//! Scalar implementation used for GF117's GT215-style PLL candidates.
++//! Scalar clock calculations used by GF117's GF100-family planner.
 +//!
 +//! Inputs come from the C-owned VBIOS PLL limits. The function does no MMIO,
 +//! allocation, pointer access, logging, or register programming. Results are
@@ -109,6 +142,34 @@ new file mode 100644
 +    pub m: i32,
 +    /// Output post-divider (P) selected by the PLL solver.
 +    pub p: i32,
++}
++
++/// Divider result shared with the GF100-family C clock planner.
++#[repr(C)]
++pub struct Gf117DivResult {
++    /// Output clock after applying the selected divider.
++    pub freq: u32,
++    /// Hardware divider field, encoded as the divisor minus two.
++    pub ddiv: u32,
++}
++
++/// Calculate the nearest GF100-family divider using C-compatible u32 wrapping.
++///
++/// The caller supplies the reference clock obtained through Nouveau's C/MMIO
++/// path. A zero requested frequency is rejected with a zero result; the
++/// production `calc_clk()` path already filters this input before calling.
++#[no_mangle]
++pub extern "C" fn gf117_rust_calc_div(refclk: u32, freq: u32) -> Gf117DivResult {
++    if freq == 0 {
++        return Gf117DivResult { freq: 0, ddiv: 0 };
++    }
++
++    let twice_refclk = refclk.wrapping_mul(2);
++    let div = (twice_refclk / freq).min(65).max(2);
++    Gf117DivResult {
++        freq: twice_refclk / div,
++        ddiv: div - 2,
++    }
 +}
 +
 +const EINVAL: i32 = -22;

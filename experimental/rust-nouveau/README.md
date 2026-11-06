@@ -84,6 +84,27 @@ The standalone fractional branch is tested, but the real GF117 caller passes
 `fractional = 0`. No PLL change has been tested on GPU hardware or authorizes
 reclocking.
 
+## GF117 clock divider helper
+
+The same opt-in Rust object now also provides `gf117_rust_calc_div()` for
+`gf100.c:calc_div()` on chipset `0xd7`. C still reads the reference clock and
+keeps the non-GF117 and Rust-disabled paths; Rust receives only the reference
+and requested frequencies and returns the resulting frequency plus the
+hardware field `div - 2`. It uses `wrapping_mul(2)` to preserve C's defined
+`u32` wraparound for `ref * 2`, even with overflow checks enabled. A zero target
+returns a zero result without division; `calc_clk()` filters zero-frequency
+domains before this helper is called.
+
+The new host harness extracts the C `calc_div()` from the pinned source,
+compares its result with the Rust object across 100,314 boundary, overflow, and
+deterministic randomized inputs, and checks that GF117 dispatches to Rust while
+other chipsets and Rust-disabled builds retain C. It passes locally with GCC
+and Clang and C UndefinedBehaviorSanitizer. These checks validate arithmetic
+and source dispatch only: the helper feeds a clock plan, and no module build
+including this divider addition or physical GPU behavior has yet been
+verified. The module build for `123ad4a` and Rust build run `42229129679` both
+predate this helper; a new pinned run is required to validate the addition.
+
 The first pinned CI attempt, run 42176186321 on commit `6ad1929`, failed in
 the host differential link before the full kernel build. Rust 1.85 emitted an
 unresolved `core::panicking::panic_const_div_by_zero` reference for guarded
